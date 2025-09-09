@@ -9,9 +9,22 @@
 #include <string>
 #include <vector>
 #include <unistd.h>
-#include "log.h"
 #include <sys/mman.h>
 #include <sys/uio.h>
+#include "log.h"
+/*
+#define LOG(...) do { printf(__VA_ARGS__); printf("\n"); } while(0)
+#define LOGE(...)  do { printf(__VA_ARGS__); printf("\n"); } while(0)
+
+// function entry logging
+#if defined(__GNUC__)
+#define __FUNC_NAME__ __PRETTY_FUNCTION__
+#else
+#define __FUNC_NAME__ __func__
+#endif
+
+#define LOG_ENTER() do { LOG("----> %s", __FUNC_NAME__); } while(0)
+ */
 
 #define PAGE_START(addr) (((uintptr_t)(addr) & PAGE_MASK))
 #define PAGE_END(addr) ((((uintptr_t)(addr) + PAGE_SIZE - 1) & PAGE_MASK))
@@ -43,7 +56,7 @@ public:
 
 public:
     inline const MapData* find_region(void* address) const {
-        LOG("find_region(%p)", address);
+        LOG("--->find_region(%p)", address);
 
         for (const auto& map : maps_) {
             LOG("  [0x%p-0x%p]",
@@ -135,7 +148,7 @@ public:
         temp_length_ = page_len;
         if (mprotect((void*)page_start, page_len, new_protect) == -1){
             LOGE("mprotect失败: %s", strerror(errno));
-            LOGE("  地址: %lu, 长度: %zu, 权限: 0x%x", page_start, page_len, new_protect);
+            LOGE("  地址: 0x%llx, 长度: %zu, 权限: 0x%x", page_start, page_len, new_protect);
             return false;
         }
 
@@ -184,7 +197,8 @@ public:
 
         if (result != -1) {
             LOG("直接写入成功: %zd bytes", result);
-            return result;
+        }else{
+            LOGE("process_vm_writev failed: %s", strerror(errno));
         }
 
         /*

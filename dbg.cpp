@@ -268,6 +268,13 @@ void command_loop(pid_t pid) {
         else if(inst == "map") {
             mapControl.print_maps();
         }
+        else if(inst == "prot") {
+            void *address= (void*)std::stoull(args_vec[1], nullptr,16);
+            size_t len = std::stoul(args_vec[2], nullptr,0);
+            int prot = std::stoi(args_vec[3], nullptr,0);
+            mapControl.change_map_permissions(address,len,prot);
+        }
+
         else if(inst == "mr"){
 
             //[mr addr len] 读取内存
