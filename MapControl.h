@@ -7,8 +7,11 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
+#include <unistd.h>
 #include "log.h"
 #include <sys/mman.h>
+#include <sys/uio.h>
 
 #define PAGE_START(addr) (((uintptr_t)(addr) & PAGE_MASK))
 #define PAGE_END(addr) ((((uintptr_t)(addr) + PAGE_SIZE - 1) & PAGE_MASK))
@@ -40,8 +43,14 @@ public:
 
 public:
     inline const MapData* find_region(void* address) const {
+        LOG("find_region(%p)", address);
+
         for (const auto& map : maps_) {
+            LOG("  [0x%p-0x%p]",
+                map.start_addr, map.end_addr);
+
             if (address >= map.start_addr && address < map.end_addr) {
+
                 return &map;
             }
         }
@@ -84,6 +93,18 @@ public:
         return true;
     }
 
+    // 显示所有内存映射
+    inline void print_maps() const {
+        LOG("=== 所有内存映射 ===");
+        for (size_t i = 0; i < maps_.size(); i++) {
+            const auto& map = maps_[i];
+             printf("[%zu] %016lx-%016lx %s prot=0x%x %s\n",
+                    i, (uintptr_t)map.start_addr, (uintptr_t)map.end_addr,
+                    map.permissions, map.prot_flags, map.path.c_str());
+        }
+        LOG("=================");
+    }
+
     inline int permissions_to_prot(const char* perms) {
         int prot = 0;
         if (perms[0] == 'r') prot |= PROT_READ;
@@ -101,7 +122,7 @@ public:
         }
 
         LOG("找到区域: %016lx-%016lx %s %s",
-            region->start_addr, region->end_addr,
+            (uintptr_t)region->start_addr, (uintptr_t)region->end_addr,
             region->permissions, region->path.c_str());
 
         uintptr_t page_start = PAGE_START(address);
@@ -138,6 +159,57 @@ public:
         return true;
     }
 
+    inline ssize_t read_memory(pid_t pid, void* target_address, size_t len, void* save_buffer) {
+        LOG_ENTER();
+        LOG("target_address :%p ,len:%zu ,save_buffer :%p",target_address,len,save_buffer);
+
+
+        iovec local{save_buffer,len};
+        iovec remote{target_address,len};
+        ssize_t result = process_vm_readv(pid,&local,1,&remote,1,0);
+        if (result == -1) {
+            LOGE("process_vm_readv failed: %s", strerror(errno));
+        }
+        return result;
+    }
+
+    inline ssize_t write_memory(pid_t pid, void* target_address, void* write_data, size_t len) {
+        LOG_ENTER();
+        LOG("target_address :%p ,len:%zu ,write_data :%p",target_address,len,write_data);
+
+        // 先尝试直接写入
+        iovec local{write_data, len};
+        iovec remote{target_address, len};
+        ssize_t result = process_vm_writev(pid, &local, 1, &remote, 1, 0);
+
+        if (result != -1) {
+            LOG("直接写入成功: %zd bytes", result);
+            return result;
+        }
+
+        /*
+        LOG("Direct write failed, trying with permission change...");
+
+        MapControl mapControl(pid);
+
+        // 修改权限
+        bool perm_changed = mapControl.change_map_permissions(target_address, len, PROT_READ | PROT_WRITE);
+        if (!perm_changed) {
+            LOG("Permission change failed, but continuing...");
+        }
+
+        // 再次写入
+        result = process_vm_writev(pid, &local, 1, &remote, 1, 0);
+
+        //恢复修改的权限
+        mapControl.resume_map_permissions();
+
+        if (result == -1) {
+            LOGE("process_vm_writev failed: %s", strerror(errno));
+        }
+    */
+        return result;
+    }
 };
 
 

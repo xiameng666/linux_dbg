@@ -11,6 +11,19 @@
 #include <string>
 #include "log.h"
 #include "MapControl.h"
+#include <sstream>
+#include <cstdio>
+#include <string>
+#include <sys/ptrace.h>
+#include <sys/wait.h>
+#include <sys/user.h>
+#include <iostream>
+#include <iomanip>
+#include <unordered_map>
+#include <linux/uio.h>
+#include <linux/elf.h>
+#include <sys/uio.h>
+#include <algorithm>
 
 void command_loop(pid_t pid);
 
@@ -23,13 +36,6 @@ void parse_thread_signal(pid_t pid);
 // 单步调试  先等我完成反汇编
 long step_into(pid_t pid);
 long step_over(pid_t pid);
-
-// 内存操作
-ssize_t read_memory(pid_t pid, void* address, size_t len, void* buffer);
-int read_memory_ptrace(pid_t pid, uint64_t addr, size_t len, uint8_t* buffer);
-ssize_t write_memory(pid_t pid, void* address, void* data, size_t len);
-int write_memory_ptrace(pid_t pid, uint64_t addr, const uint8_t* data, size_t len);
-//void dump_memory_hex(const uint8_t* data, size_t len, uint64_t base);
 
 // 寄存器
 long get_reg(pid_t pid, const char* reg_name, uint64_t* value);

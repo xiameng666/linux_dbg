@@ -2,18 +2,7 @@
 // Created by XiaM on 2025/9/9.
 //
 #include "dbg.h"
-#include <sstream>
-#include <cstdio>
-#include <string>
-#include <sys/ptrace.h>
-#include <sys/wait.h>
-#include <sys/user.h>
-#include <iostream>
-#include <iomanip>
-#include <unordered_map>
-#include <linux/uio.h>
-#include <linux/elf.h>
-#include <sys/uio.h>
+
 
 static const std::unordered_map<std::string, size_t> reg_map = {
         // 通用寄存器
@@ -212,6 +201,7 @@ void print_single_reg(const std::string& reg_name, uint64_t value) {
 }
 
 void command_loop(pid_t pid) {
+    MapControl mapControl(pid);
     uint8_t read_memory_buffer[0x1000];
     std::string cmdline;
 
@@ -229,7 +219,8 @@ void command_loop(pid_t pid) {
         }
 
         if(args_vec.empty()) continue;
-        const std::string& inst = args_vec[0];
+        std::string& inst = args_vec[0];
+        std::transform(inst.begin(), inst.end(), inst.begin(), ::tolower);
 
         if(inst == "g"){
             //恢复
@@ -274,24 +265,27 @@ void command_loop(pid_t pid) {
             step_over(pid);
 
         }
+        else if(inst == "map") {
+            mapControl.print_maps();
+        }
         else if(inst == "mr"){
 
             //[mr addr len] 读取内存
-            void *address= (void*)std::stoull(args_vec[1], nullptr,0);
+            void *address= (void*)std::stoull(args_vec[1], nullptr,16);
             size_t len = std::stoul(args_vec[2], nullptr,0);
-            read_memory(pid, address, len, read_memory_buffer);
+            mapControl.read_memory(pid, address, len, read_memory_buffer);
 
         }
         else if(inst == "mw"){
             //[mw addr xx xx ...] 写入内存
-            void *address= (void*)std::stoull(args_vec[1], nullptr,0);
+            void *address= (void*)std::stoull(args_vec[1], nullptr,16);
             std::vector<uint8_t> bytes(args_vec.size()-2);
             std::transform(args_vec.begin() + 2, args_vec.end(), bytes.begin(),
                            [](const std::string& s) {
                                return (uint8_t)std::stoull(s, nullptr, 16);  // 强制16进制
                            });
 
-            ssize_t written = write_memory(pid, (void*)address, bytes.data(), bytes.size());
+            ssize_t written = mapControl.write_memory(pid, (void*)address, bytes.data(), bytes.size());
             std::cout << "write " << written << " bytes\n";
 
         }
@@ -347,34 +341,4 @@ long step_over(pid_t pid){
     return 0;
 }
 
-ssize_t read_memory(pid_t pid, void* target_address, size_t len, void* save_buffer) {
-    LOG_ENTER();
-    LOG("target_address :%p ,len:%zu ,save_buffer :%p",target_address,len,save_buffer);
 
-
-    iovec local{save_buffer,len};
-    iovec remote{target_address,len};
-    ssize_t result = process_vm_readv(pid,&local,1,&remote,1,0);
-    if (result == -1) {
-        LOGE("process_vm_readv failed: %s", strerror(errno));
-    }
-    return result;
-}
-
-ssize_t write_memory(pid_t pid, void* target_address, void* write_data, size_t len) {
-    LOG_ENTER();
-    LOG("target_address :%p ,len:%zu ,write_data :%p",target_address,len,write_data);
-
-    MapControl mapControl(pid);
-    mapControl.change_map_permissions(target_address, len, PROT_READ | PROT_WRITE);
-
-    iovec local{write_data,len};
-    iovec remote{target_address,len};
-    ssize_t result = process_vm_writev(pid,&local,1,&remote,1,0);
-    if (result == -1) {
-        LOGE("process_vm_writev failed: %s", strerror(errno));
-    }
-
-    mapControl.resume_map_permissions();
-    return result;
-}
