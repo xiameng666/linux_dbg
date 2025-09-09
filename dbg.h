@@ -10,6 +10,7 @@
 #include <sys/user.h>
 #include <string>
 #include "log.h"
+#include "MapControl.h"
 
 void command_loop(pid_t pid);
 
@@ -19,9 +20,16 @@ long resume_process(pid_t pid);
 int suspend_process(pid_t pid);
 void parse_thread_signal(pid_t pid);
 
-// 单步调试
+// 单步调试  先等我完成反汇编
 long step_into(pid_t pid);
 long step_over(pid_t pid);
+
+// 内存操作
+ssize_t read_memory(pid_t pid, void* address, size_t len, void* buffer);
+int read_memory_ptrace(pid_t pid, uint64_t addr, size_t len, uint8_t* buffer);
+ssize_t write_memory(pid_t pid, void* address, void* data, size_t len);
+int write_memory_ptrace(pid_t pid, uint64_t addr, const uint8_t* data, size_t len);
+//void dump_memory_hex(const uint8_t* data, size_t len, uint64_t base);
 
 // 寄存器
 long get_reg(pid_t pid, const char* reg_name, uint64_t* value);
@@ -29,8 +37,8 @@ long set_reg(pid_t pid, const char* reg_name, uint64_t value);
 bool print_all_regs(pid_t pid); 
 void print_single_reg(const std::string& reg_name, uint64_t value);
 
-//
-long step_into(pid_t pid);
+//解析map数据并存储
+void parse_map(pid_t pid);
 
 // pidof XXX
 pid_t get_process_pid(const char* process_name);

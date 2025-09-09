@@ -3,9 +3,10 @@
 
 int main(){
 
-    pid_t pid = get_process_pid("test_target");
+    pid_t pid = get_process_pid("dbgtest");
 
     attach_process(pid);
+
     parse_thread_signal(pid);
 
     command_loop(pid);
