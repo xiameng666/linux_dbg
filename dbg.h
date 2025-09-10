@@ -24,6 +24,12 @@
 #include <linux/elf.h>
 #include <sys/uio.h>
 #include <algorithm>
+#include <signal.h>
+
+// 确保TRAP_TRACE定义
+#ifndef TRAP_TRACE
+#define TRAP_TRACE 2
+#endif
 
 void command_loop(pid_t pid);
 

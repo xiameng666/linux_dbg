@@ -96,11 +96,17 @@ void parse_thread_signal(pid_t pid) {
                 LOG("命中断点 PC=0x%lx", pc);
                 g_last_disasm_addr = 0; // 重置为0，下次u命令会从当前PC开始
                 
-                // 临时禁用当前断点，避免 g 命令时立即再次触发
+                // 临时禁用当前断点，避免 g 命令时再次触发
                 bp_temp_disable(pid, (void*)pc);
-                
                 print_all_regs(pid);
                 //handle_breakpoint_hit(pid, (void*)pc);
+            }
+        }
+        //检测单步
+        else if (sig == SIGTRAP && info.si_code == TRAP_HWBKPT) {
+            uint64_t pc = 0;
+            if (get_reg(pid, "pc", &pc) == 0) {
+                LOG("单步完成 PC=0x%lx", pc);
             }
         }
     }
@@ -583,9 +589,18 @@ bool bp_clear(pid_t pid, size_t index) {
 
     breakpoint& bp = g_bp_vec[index];
 
-    if (write_memory_ptrace(pid, bp.address, (void *) &bp.origin_inst, 4) != 4) {
-        LOGE("bp_clear 写回指令失败");
-        return false;
+    /*如果在程序遇到断点trap的时候先禁用了断点 此时删除断点 当再go的时候 断点又被写回了
+    *检查要删除的断点是否是当前临时禁用的断点*/
+    if (bp.address == g_temp_disabled_bp) {
+        LOG("清除临时禁用状态: 0x%lx", (unsigned long)bp.address);
+        g_temp_disabled_bp = nullptr;  // 清除临时禁用状态
+        // 断点已经被临时禁用 不需要写回原数据了
+    } else {
+        // 如果断点当前是激活状态，需要写回原始指令
+        if (write_memory_ptrace(pid, bp.address, (void *) &bp.origin_inst, 4) != 4) {
+            LOGE("bp_clear 写回指令失败");
+            return false;
+        }
     }
 
     g_bp_vec.erase(g_bp_vec.begin() + index);
@@ -628,7 +643,7 @@ void bp_temp_disable(pid_t pid, void* address) {
     }
 }
 
-// 恢复临时禁用的断点（重新写入BRK指令）
+// 恢复临时禁用的断点（重新写入BRK）
 void bp_restore_temp_disabled(pid_t pid) {
     LOG_ENTER("(pid=%d)", pid);
     
