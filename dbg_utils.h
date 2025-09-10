@@ -24,14 +24,7 @@
 #include <linux/elf.h>
 #include <sys/uio.h>
 #include <algorithm>
-#include <signal.h>
-
-// 确保TRAP_TRACE定义
-#ifndef TRAP_TRACE
-#define TRAP_TRACE 2
-#endif
-
-void command_loop(pid_t pid);
+#include "capstone/capstone.h"
 
 long attach_process(pid_t pid);
 long detach_process(pid_t pid);
@@ -70,6 +63,7 @@ ssize_t read_memory_vm(pid_t pid, void* target_address, size_t len, void* save_b
 ssize_t write_memory_vm(pid_t pid, void* target_address, void* write_data, size_t len);
 
 //
+void disasm(const uint8_t *code ,size_t code_size, uint64_t address,bool isbp = false);
 void disasm_lines(pid_t pid, void* target_addr = nullptr, size_t line = 5, bool is_continue = false);
 
 //解析map数据并存储

@@ -1,8 +1,7 @@
 //
 // Created by XiaM on 2025/9/9.
 //
-#include "dbg.h"
-#include "disasm.h"
+#include "dbg_utils.h"
 
 // 全局状态：记录上次反汇编的地址，用于连续反汇编
 static uint64_t g_last_disasm_addr = 0;
@@ -218,157 +217,6 @@ bool print_all_regs(pid_t pid) {
 void print_single_reg(const std::string& reg_name, uint64_t value) {
     std::cout << reg_name << " = 0x" << std::hex << std::setfill('0') << std::setw(16) << value;
     std::cout << " (" << std::dec << value << ")" << std::endl;
-}
-
-void command_loop(pid_t pid) {
-    MapControl mapControl(pid);
-    uint8_t read_memory_buffer[0x1000];
-    std::string cmdline;
-
-    while(true){
-        std::cout<< "> " <<std::flush;
-        std::getline(std::cin,cmdline);
-
-        //分割输入的命令
-        if(cmdline.empty()) continue;
-        auto args_vec = split_space(cmdline);
-
-//        //观测分割情况
-//        for (size_t i = 0; i < args_vec.size(); ++i) {
-//            LOG("arg[%zu]=%s", i, args_vec[i].c_str());
-//        }
-
-        if(args_vec.empty()) continue;
-        std::string& inst = args_vec[0];
-        std::transform(inst.begin(), inst.end(), inst.begin(), ::tolower);
-
-        if(inst == "g"){
-            // 如果有临时禁用的断点
-            if (g_temp_disabled_bp != nullptr) {
-                // 单步执行跳过当前断点指令
-                step_into(pid);
-                parse_thread_signal(pid);
-                // 然后恢复断点
-                bp_restore_temp_disabled(pid);
-            }
-            // 恢复执行
-            resume_process(pid);
-            parse_thread_signal(pid);
-
-        }
-        else if(inst == "p") {
-            //解析信号
-            parse_thread_signal(pid);
-
-        }
-        else if(inst == "stop"){
-            //挂起
-            suspend_process(pid);
-
-        }
-        else if(inst == "r"){
-            if (args_vec.size() == 1) {
-                // r - 显示所有寄存器
-                print_all_regs(pid);
-            } else if (args_vec.size() == 3) {
-                // r <reg_name> <value> - 设置寄存器
-                try {
-                    uint64_t value = std::stoull(args_vec[2], nullptr, 0); // 支持0x前缀
-                    if (set_reg(pid, args_vec[1].c_str(), value) == 0) {
-                        std::cout << "Set " << args_vec[1] << " = 0x" << std::hex << value << std::dec << "\n";
-                    } else {
-                        std::cout << "Failed to set register: " << args_vec[1] << "\n";
-                    }
-                } catch (const std::exception& e) {
-                    std::cout << "Invalid value: " << args_vec[2] << "\n";
-                }
-            }
-
-        }
-        else if(inst == "u") {
-            if(args_vec.size() == 2){
-               void*  pc_value = (void*)std::stoull(args_vec[1], nullptr,16);
-                disasm_lines(pid, pc_value,5,true);
-            }else{
-                // u - 连续反汇编
-                disasm_lines(pid, nullptr, 5, true);
-            }
-
-        }
-        else if(inst == "s") {
-            //步入
-            // 先恢复临时禁用的断点
-            bp_restore_temp_disabled(pid);
-
-            step_into(pid);
-            parse_thread_signal(pid);
-            // 重置反汇编状态到当前PC，并显示当前指令
-            disasm_lines(pid, nullptr, 1, false);
-
-        }
-        else if(inst == "n") {
-            //步过
-            // 先恢复临时禁用的断点
-            bp_restore_temp_disabled(pid);
-            step_over(pid);
-            parse_thread_signal(pid);
-            // 重置反汇编状态到当前PC，并显示当前指令
-            disasm_lines(pid, nullptr, 1, false);
-
-        }
-        else if (inst == "bp") {
-            uint64_t addr = std::stoull(args_vec[1], nullptr, 16);
-            bp_set(pid, (void*)addr);
-
-        }
-        else if (inst == "bpl") {
-            bp_show();
-
-        }
-        else if (inst == "bpc") {
-            size_t index = (size_t)std::stoul(args_vec[1], nullptr, 10);
-            bp_clear(pid, index);
-
-        }
-        else if(inst == "map") {
-            mapControl.print_maps();
-
-        }
-
-        else if(inst == "prot") {
-            void *address= (void*)std::stoull(args_vec[1], nullptr,16);
-            size_t len = std::stoul(args_vec[2], nullptr,0);
-            int prot = std::stoi(args_vec[3], nullptr,0);
-            mapControl.change_map_permissions(address,len,prot);
-
-        }
-
-        else if(inst == "mr"){
-
-            //[mr addr len] 读取内存
-            void *address= (void*)std::stoull(args_vec[1], nullptr,16);
-            size_t len = std::stoul(args_vec[2], nullptr,0);
-            read_memory_vm(pid, address, len, read_memory_buffer);
-
-        }
-        else if(inst == "mw"){
-            //[mw addr xx xx ...] 写入内存
-            void *address= (void*)std::stoull(args_vec[1], nullptr,16);
-            std::vector<uint8_t> bytes(args_vec.size()-2);
-            std::transform(args_vec.begin() + 2, args_vec.end(), bytes.begin(),
-                           [](const std::string& s) {
-                               return (uint8_t)std::stoull(s, nullptr, 16);  // 强制16进制
-                           });
-
-            ssize_t written = write_memory_ptrace(pid, (void *) address, bytes.data(), bytes.size());
-            std::cout << "write " << written << " bytes\n";
-
-        }
-        else {
-            std::cout << "Unknown command: " << inst << " (try 'help')\n";
-        }
-
-    }
 }
 
 std::vector<std::string> split_space(const std::string &s) {
@@ -659,3 +507,32 @@ void bp_restore_temp_disabled(pid_t pid) {
 }
 
 
+
+void disasm(const uint8_t *code ,size_t code_size, uint64_t address,bool isbp){
+    csh  handle;
+    cs_err error = cs_open(CS_ARCH_AARCH64,CS_MODE_ARM,&handle);
+    if(error != CS_ERR_OK){
+        printf("cs_open %s\r\n", cs_strerror(error));
+        return;
+    }
+
+    cs_option(handle,CS_OPT_DETAIL,CS_OPT_ON);//开启详细模式
+
+    cs_insn* insn;
+    size_t count = cs_disasm(handle, code, code_size, address, 1, &insn);
+    if (count == 0) {
+        cs_err derr = cs_errno(handle);
+        printf("cs_disasm failed: %s\r\n", cs_strerror(derr));
+        cs_close(&handle);
+        return;
+    }
+    if(isbp){
+        printf("%p %s %s [Breakpoint]\r\n",address,insn[0].mnemonic,insn[0].op_str);
+    }else{
+        printf("%p %s %s\r\n",address,insn[0].mnemonic,insn[0].op_str);
+    }
+
+
+    cs_free(insn,1);
+    cs_close(&handle);
+}

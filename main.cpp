@@ -1,5 +1,8 @@
 #include <cstdio>
-#include "dbg.h"
+
+#include "dbg_command.h"
+
+
 
 int main(){
 
