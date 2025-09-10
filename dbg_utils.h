@@ -26,6 +26,11 @@
 #include <algorithm>
 #include "capstone/capstone.h"
 
+// 全局状态：记录上次反汇编的地址，用于连续反汇编
+extern uint64_t g_last_disasm_addr;
+// 临时禁用的断点地址
+extern void* g_temp_disabled_bp;
+
 long attach_process(pid_t pid);
 long detach_process(pid_t pid);
 long resume_process(pid_t pid);
@@ -66,6 +71,8 @@ ssize_t write_memory_vm(pid_t pid, void* target_address, void* write_data, size_
 void disasm(const uint8_t *code ,size_t code_size, uint64_t address,bool isbp = false);
 void disasm_lines(pid_t pid, void* target_addr = nullptr, size_t line = 5, bool is_continue = false);
 
+uint8_t get_inst_type(pid_t pid,void* address);
+
 //解析map数据并存储
 void parse_map(pid_t pid);
 
@@ -74,4 +81,11 @@ pid_t get_process_pid(const char* process_name);
 
 //按空格分割字符到数组
 std::vector<std::string> split_space(const std::string& s);
+
+// 十六进制转储函数
+void hexdump(const void* data, size_t size, uintptr_t base_addr = 0);
+
+
+
+
 #endif //LINUX_DBG_H

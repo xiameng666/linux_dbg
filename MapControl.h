@@ -75,15 +75,18 @@ public:
         while(fgets(line,sizeof(line),fp)){
             MapData map{};
             char path_buf[256];
+            unsigned long start_addr_temp, end_addr_temp;
             int result = sscanf(line,"%lx-%lx %7s %lx %15s %lu %s",
-                                &map.start_addr,
-                                &map.end_addr,
+                                &start_addr_temp,
+                                &end_addr_temp,
                                 map.permissions,
                                 &map.offset,
                                 map.device,
                                 &map.inode,
                                 path_buf);
 
+            map.start_addr = (void*)start_addr_temp;
+            map.end_addr = (void*)end_addr_temp;
             map.path = path_buf;
             map.prot_flags = permissions_to_prot(map.permissions);
 
@@ -135,7 +138,7 @@ public:
         temp_length_ = page_len;
         if (mprotect((void*)page_start, page_len, new_protect) == -1){
             LOGE("mprotect失败: %s", strerror(errno));
-            LOGE("  地址: 0x%llx, 长度: %zu, 权限: 0x%x", page_start, page_len, new_protect);
+            LOGE("  地址: 0x%lx, 长度: %zu, 权限: 0x%x", page_start, page_len, new_protect);
             return false;
         }
 

@@ -3,11 +3,6 @@
 //
 #include "dbg_command.h"
 
-// 全局状态：记录上次反汇编的地址，用于连续反汇编
-extern uint64_t g_last_disasm_addr;
-// 临时禁用的断点地址
-extern void* g_temp_disabled_bp;
-
 // 命令映射表
 static std::unordered_map<std::string, CommandHandler> command_table = {
         {"g", cmd_continue},
@@ -126,7 +121,9 @@ void cmd_step_into(pid_t pid, const std::vector<std::string>& args) {
     bp_restore_temp_disabled(pid);
 
     step_into(pid);
+
     parse_thread_signal(pid);
+
     // 重置反汇编状态到当前PC，并显示当前指令
     disasm_lines(pid, nullptr, 1, false);
 }
@@ -136,8 +133,11 @@ void cmd_step_over(pid_t pid, const std::vector<std::string>& args) {
     //步过
     // 先恢复临时禁用的断点
     bp_restore_temp_disabled(pid);
+
     step_over(pid);
+
     parse_thread_signal(pid);
+
     // 重置反汇编状态到当前PC，并显示当前指令
     disasm_lines(pid, nullptr, 1, false);
 }
@@ -182,6 +182,11 @@ void cmd_memory_read(pid_t pid, const std::vector<std::string>& args) {
     void *address= (void*)std::stoull(args[1], nullptr,16);
     size_t len = std::stoul(args[2], nullptr,0);
     read_memory_vm(pid, address, len, read_memory_buffer);
+
+    ssize_t bytes_read = read_memory_vm(pid, address, len, read_memory_buffer);
+    if (bytes_read > 0) {
+        hexdump(read_memory_buffer, bytes_read, (uintptr_t)address);
+    }
 }
 
 void cmd_memory_write(pid_t pid, const std::vector<std::string>& args) {

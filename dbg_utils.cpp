@@ -4,9 +4,9 @@
 #include "dbg_utils.h"
 
 // 全局状态：记录上次反汇编的地址，用于连续反汇编
-static uint64_t g_last_disasm_addr = 0;
+uint64_t g_last_disasm_addr = 0;
 // 临时禁用的断点地址
-static void* g_temp_disabled_bp = nullptr;
+void* g_temp_disabled_bp = nullptr;
 
 static const std::unordered_map<std::string, size_t> reg_map = {
         // 通用寄存器
@@ -261,16 +261,35 @@ long step_into(pid_t pid) {
 long step_over(pid_t pid){
     LOG_ENTER("(pid=%d)", pid);
 
-    //非调用指令：直接单步 PTRACE_SINGLESTEP
-    //如果是BL BLR ，在PC+4 设置一个临时断点，然后 go
+    uint64_t pc_value;
+    if (get_reg(pid, "pc", &pc_value) != 0) {
+        LOGE("Failed to get PC register");
+        return -1;
+    }
 
-    return 0;
+    uint8_t inst_type = get_inst_type(pid, &pc_value);
+    
+    if (inst_type == CS_GRP_CALL) {
+        // BL/BLR ：在返回地址设置临时断点
+        uintptr_t return_addr = pc_value + 4;
+        LOGD("step_over 检测到 CS_GRP_CALL 设置临时断点: 0x%lx", return_addr);
+        
+        if (!bp_set(pid, (void*)return_addr)) {
+            LOGE("step_over 临时断点设置失败");
+            return -1;
+        }
+        
+        // 继续执行
+        return resume_process(pid);
+        
+    } else {
+        LOGE("step_over 非调用指令，单步");
+        return step_into(pid);
+    }
 }
-
 
 ssize_t read_memory_vm(pid_t pid, void *target_address, size_t len, void *save_buffer) {
     LOG_ENTER("(pid=%d, target_address=%p, len=%zu, save_buffer=%p)", pid, target_address, len, save_buffer);
-
 
     iovec local{save_buffer,len};
     iovec remote{target_address,len};
@@ -279,6 +298,42 @@ ssize_t read_memory_vm(pid_t pid, void *target_address, size_t len, void *save_b
         LOGE("process_vm_readv failed: %s", strerror(errno));
     }
     return result;
+}
+
+void hexdump(const void* data, size_t size, uintptr_t base_addr) {
+    const uint8_t* bytes = static_cast<const uint8_t*>(data);
+    const size_t bytes_per_line = 16;
+    
+    for (size_t i = 0; i < size; i += bytes_per_line) {
+        // 打印地址
+        printf("0x%08lx  ", base_addr + i);
+        
+        // 打印十六进制字节 (分两组，每组8字节)
+        for (size_t j = 0; j < bytes_per_line; j++) {
+            if (i + j < size) {
+                printf("%02x ", bytes[i + j]);
+            } else {
+                printf("   "); // 空白填充
+            }
+            
+            // 在第8个字节后添加额外空格
+            if (j == 7) {
+                printf(" ");
+            }
+        }
+        
+        // 打印ASCII表示
+        printf(" |");
+        for (size_t j = 0; j < bytes_per_line && i + j < size; j++) {
+            uint8_t byte = bytes[i + j];
+            if (byte >= 32 && byte <= 126) {
+                printf("%c", byte);
+            } else {
+                printf(".");
+            }
+        }
+        printf("|\n");
+    }
 }
 
 ssize_t write_memory_vm(pid_t pid, void *target_address, void *write_data, size_t len) {
@@ -506,13 +561,11 @@ void bp_restore_temp_disabled(pid_t pid) {
     }
 }
 
-
-
 void disasm(const uint8_t *code ,size_t code_size, uint64_t address,bool isbp){
     csh  handle;
     cs_err error = cs_open(CS_ARCH_AARCH64,CS_MODE_ARM,&handle);
     if(error != CS_ERR_OK){
-        printf("cs_open %s\r\n", cs_strerror(error));
+        printf("cs_open failed %s\r\n", cs_strerror(error));
         return;
     }
 
@@ -527,12 +580,50 @@ void disasm(const uint8_t *code ,size_t code_size, uint64_t address,bool isbp){
         return;
     }
     if(isbp){
-        printf("%p %s %s [Breakpoint]\r\n",address,insn[0].mnemonic,insn[0].op_str);
+        printf("0x%lx %s %s [Breakpoint]\r\n",address,insn[0].mnemonic,insn[0].op_str);
     }else{
-        printf("%p %s %s\r\n",address,insn[0].mnemonic,insn[0].op_str);
+        printf("0x%lx %s %s\r\n",address,insn[0].mnemonic,insn[0].op_str);
     }
 
 
     cs_free(insn,1);
     cs_close(&handle);
+}
+
+uint8_t get_inst_type(pid_t pid, void* address) {
+
+    // 如果地址为空，获取当前PC
+    auto pc = (uint64_t)address;
+    if (pc == 0) {
+        if (get_reg(pid, "pc", &pc) != 0) {
+            return 0; // 返回0表示失败
+        }
+    }
+
+    // 读取指令
+    uint32_t instruction;
+    if (read_memory_vm(pid, (void*)pc, sizeof(instruction), &instruction) != sizeof(instruction)) {
+        return 0;
+    }
+
+    csh handle;
+    if (cs_open(CS_ARCH_AARCH64, CS_MODE_ARM, &handle) != CS_ERR_OK) {
+        return 0;
+    }
+    
+    cs_option(handle, CS_OPT_DETAIL, CS_OPT_ON);
+    
+    cs_insn* insn;
+    size_t count = cs_disasm(handle, (uint8_t*)&instruction, sizeof(instruction), pc, 1, &insn);
+    
+    uint8_t group_type = 0;
+    if (insn[0].detail) {
+        cs_detail* detail = insn[0].detail;
+        group_type = detail->groups[0];
+        LOGD("指令类型: %s %s -> CS_GRP_%d", insn[0].mnemonic, insn[0].op_str, group_type);
+        cs_free(insn, count);
+    }
+    
+    cs_close(&handle);
+    return group_type;
 }
