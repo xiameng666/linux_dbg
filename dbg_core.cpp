@@ -1,7 +1,7 @@
 //
 // Created by XiaM on 2025/9/9.
 //
-#include "dbg_utils.h"
+#include "dbg_core.h"
 
 // 全局状态：记录上次反汇编的地址，用于连续反汇编
 uint64_t g_last_disasm_addr = 0;

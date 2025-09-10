@@ -23,7 +23,7 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/third_party/capstone)
 add_executable(${CMAKE_PROJECT_NAME}
         # List C/C++ source files with relative paths to this CMakeLists.txt.
         main.cpp
-        dbg_utils.cpp
+        dbg_core.cpp
         dbg_command.cpp)
 
 if (TARGET capstone-static)

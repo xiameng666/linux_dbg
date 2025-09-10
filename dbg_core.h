@@ -85,7 +85,8 @@ std::vector<std::string> split_space(const std::string& s);
 // 十六进制转储函数
 void hexdump(const void* data, size_t size, uintptr_t base_addr = 0);
 
-
+//设置
+void trace(uintptr_t start,uintptr_t end);
 
 
 #endif //LINUX_DBG_H

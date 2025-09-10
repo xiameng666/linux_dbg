@@ -5,7 +5,7 @@
 #ifndef LINUX_DBG_DBG_COMMAND_H
 #define LINUX_DBG_DBG_COMMAND_H
 
-#include "dbg_utils.h"
+#include "dbg_core.h"
 
 typedef void (*CommandHandler)(pid_t pid, const std::vector<std::string>& args);
 
