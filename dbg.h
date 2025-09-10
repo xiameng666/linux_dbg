@@ -56,11 +56,13 @@ bool print_all_regs(pid_t pid);
 void print_single_reg(const std::string& reg_name, uint64_t value);
 
 //
-ssize_t read_memory(pid_t pid, void* target_address, size_t len, void* save_buffer);
-ssize_t write_memory(pid_t pid, void* target_address, void* write_data, size_t len);
+ssize_t write_memory_ptrace(pid_t pid, void *target_address, void *write_data, size_t len);
+ssize_t read_memory_ptrace(pid_t pid, void *target_address, size_t len, void *save_buffer);
+ssize_t read_memory_vm(pid_t pid, void* target_address, size_t len, void* save_buffer);
+ssize_t write_memory_vm(pid_t pid, void* target_address, void* write_data, size_t len);
 
 //
-void disasm_addr(pid_t  pid, void* target_addr = nullptr);
+void disasm_lines(pid_t pid, void* target_addr = nullptr, size_t line = 5);
 
 //解析map数据并存储
 void parse_map(pid_t pid);

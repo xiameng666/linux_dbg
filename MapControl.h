@@ -12,19 +12,6 @@
 #include <sys/mman.h>
 #include <sys/uio.h>
 #include "log.h"
-/*
-#define LOG(...) do { printf(__VA_ARGS__); printf("\n"); } while(0)
-#define LOGE(...)  do { printf(__VA_ARGS__); printf("\n"); } while(0)
-
-// function entry logging
-#if defined(__GNUC__)
-#define __FUNC_NAME__ __PRETTY_FUNCTION__
-#else
-#define __FUNC_NAME__ __func__
-#endif
-
-#define LOG_ENTER() do { LOG("----> %s", __FUNC_NAME__); } while(0)
- */
 
 #define PAGE_START(addr) (((uintptr_t)(addr) & PAGE_MASK))
 #define PAGE_END(addr) ((((uintptr_t)(addr) + PAGE_SIZE - 1) & PAGE_MASK))
@@ -72,7 +59,7 @@ public:
 
     //解析并存储map数据
     inline bool parse(pid_t pid){
-        LOG_ENTER();
+        LOG_ENTER("(pid=%d)", pid);
         maps_.clear();
 
         char maps_cmd[256];
@@ -157,7 +144,7 @@ public:
     }
 
     inline bool resume_map_permissions(){
-        LOG_ENTER();
+        LOG_ENTER("()");
 
         LOG("恢复权限: 地址=%p, 长度=%zu, 权限=0x%x",
             temp_address_, temp_length_, temp_prot_);

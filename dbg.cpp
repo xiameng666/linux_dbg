@@ -5,6 +5,8 @@
 #include "disasm.h"
 
 
+static uint64_t g_last_disasm_addr = 0;
+
 static const std::unordered_map<std::string, size_t> reg_map = {
         // 通用寄存器
         {"x0",  offsetof(struct user_regs_struct, regs[0])},
@@ -47,7 +49,7 @@ static const std::unordered_map<std::string, size_t> reg_map = {
 };
 
 long attach_process(pid_t pid) {
-    LOG_ENTER();
+    LOG_ENTER("(pid=%d)", pid);
 
     long result = ptrace(PTRACE_ATTACH,pid,NULL,NULL);
     if(-1 == result){
@@ -59,7 +61,7 @@ long attach_process(pid_t pid) {
 }
 
 long detach_process(pid_t pid) {
-    LOG_ENTER();
+    LOG_ENTER("(pid=%d)", pid);
 
     long result = ptrace(PTRACE_DETACH,pid,NULL,NULL);
     if(-1 == result){
@@ -70,7 +72,7 @@ long detach_process(pid_t pid) {
 }
 
 void parse_thread_signal(pid_t pid) {
-    LOG_ENTER();
+    LOG_ENTER("(pid=%d)", pid);
 
     int status = 0;
     pid_t r = waitpid(pid, &status, 0);  // 阻塞等待该线程的状态变化
@@ -84,27 +86,27 @@ void parse_thread_signal(pid_t pid) {
         siginfo_t info{};
         ptrace(PTRACE_GETSIGINFO, pid, 0, &info);
         LOG("stopped:si_signo=%d si_code=%d si_pid=%d", info.si_signo, info.si_code, info.si_pid);
-    }
-    else if (WIFEXITED(status)) {
-        LOG("exited: tid=%d code=%d", r, WEXITSTATUS(status));
-    }
-    else if (WIFSIGNALED(status)) {
-        LOG("signaled: tid=%d sig=%d", r, WTERMSIG(status));
-    }
-    else if (WIFCONTINUED(status)) {
-        LOG("continued: tid=%d", r);
+        
+        // 检测断点命中
+        if (sig == SIGTRAP && info.si_code == TRAP_BRKPT) {
+            uint64_t pc = 0;
+            if (get_reg(pid, "pc", &pc) == 0) {
+                LOG("命中断点 PC=0x%lx", pc);
+                //handle_breakpoint_hit(pid, (void*)pc);
+            }
+        }
     }
 }
 
 int suspend_process(pid_t pid) {
-    LOG_ENTER();
+    LOG_ENTER("(pid=%d)", pid);
 
     int result = kill(pid,SIGSTOP);
     return result;
 }
 
 long resume_process(pid_t pid) {
-    LOG_ENTER();
+    LOG_ENTER("(pid=%d)", pid);
 
     long result = ptrace(PTRACE_CONT,pid,NULL,NULL);
     if (result == -1) {
@@ -115,7 +117,7 @@ long resume_process(pid_t pid) {
 }
 
 long get_reg(pid_t pid, const char* reg_name, uint64_t* value) {
-    LOG_ENTER();
+    LOG_ENTER("(pid=%d, reg_name=%s, value=%p)", pid, reg_name, value);
 
     user_regs_struct regs{};
     iovec iov{&regs, sizeof(user_regs_struct)};
@@ -138,7 +140,7 @@ long get_reg(pid_t pid, const char* reg_name, uint64_t* value) {
 }
 
 long set_reg(pid_t pid, const char* reg_name, uint64_t value) {
-    LOG_ENTER();
+    LOG_ENTER("(pid=%d, reg_name=%s, value=0x%lx)", pid, reg_name, (unsigned long)value);
 
     user_regs_struct regs{};
     iovec iov{&regs, sizeof(user_regs_struct)};
@@ -169,7 +171,7 @@ long set_reg(pid_t pid, const char* reg_name, uint64_t value) {
 }
 
 bool print_all_regs(pid_t pid) {
-    LOG_ENTER();
+    LOG_ENTER("(pid=%d)", pid);
 
     user_regs_struct regs{};
     iovec iov{&regs, sizeof(user_regs_struct)};
@@ -217,10 +219,10 @@ void command_loop(pid_t pid) {
         if(cmdline.empty()) continue;
         auto args_vec = split_space(cmdline);
 
-        //观测分割情况
-        for (size_t i = 0; i < args_vec.size(); ++i) {
-            LOG("arg[%zu]=%s", i, args_vec[i].c_str());
-        }
+//        //观测分割情况
+//        for (size_t i = 0; i < args_vec.size(); ++i) {
+//            LOG("arg[%zu]=%s", i, args_vec[i].c_str());
+//        }
 
         if(args_vec.empty()) continue;
         std::string& inst = args_vec[0];
@@ -229,6 +231,7 @@ void command_loop(pid_t pid) {
         if(inst == "g"){
             //恢复
             resume_process(pid);
+            parse_thread_signal(pid);
 
         }
         else if(inst == "p") {
@@ -263,10 +266,10 @@ void command_loop(pid_t pid) {
         else if(inst == "u") {
             if(args_vec.size() == 2){
                void*  pc_value = (void*)std::stoull(args_vec[1], nullptr,16);
-                disasm_addr(pid,pc_value);
+                disasm_lines(pid, pc_value);
             }else{
                 //当前pc反汇编
-                disasm_addr(pid);
+                disasm_lines(pid);
             }
 
         }
@@ -274,18 +277,18 @@ void command_loop(pid_t pid) {
             //步入
             step_into(pid);
             parse_thread_signal(pid);
-            disasm_addr(pid);
+            disasm_lines(pid);
 
         }
         else if(inst == "n") {
             //步过
             step_over(pid);
             parse_thread_signal(pid);
-            disasm_addr(pid);
+            disasm_lines(pid);
 
         }
         else if (inst == "bp"){
-            uint64_t addr = std::stoull(args_vec[1], nullptr, 0);
+            uint64_t addr = std::stoull(args_vec[1], nullptr, 16);
             bp_set(pid, (void*)addr);
 
         }
@@ -316,7 +319,7 @@ void command_loop(pid_t pid) {
             //[mr addr len] 读取内存
             void *address= (void*)std::stoull(args_vec[1], nullptr,16);
             size_t len = std::stoul(args_vec[2], nullptr,0);
-            read_memory(pid, address, len, read_memory_buffer);
+            read_memory_vm(pid, address, len, read_memory_buffer);
 
         }
         else if(inst == "mw"){
@@ -328,7 +331,7 @@ void command_loop(pid_t pid) {
                                return (uint8_t)std::stoull(s, nullptr, 16);  // 强制16进制
                            });
 
-            ssize_t written = write_memory(pid, (void*)address, bytes.data(), bytes.size());
+            ssize_t written = write_memory_ptrace(pid, (void *) address, bytes.data(), bytes.size());
             std::cout << "write " << written << " bytes\n";
 
         }
@@ -368,7 +371,7 @@ pid_t get_process_pid(const char *process_name) {
 }
 
 long step_into(pid_t pid) {
-    LOG_ENTER();
+    LOG_ENTER("(pid=%d)", pid);
 
     long result = ptrace(PTRACE_SINGLESTEP, pid, NULL, NULL);
     if (result == -1) {
@@ -379,7 +382,7 @@ long step_into(pid_t pid) {
 }
 
 long step_over(pid_t pid){
-    LOG_ENTER();
+    LOG_ENTER("(pid=%d)", pid);
 
     //非调用指令：直接单步 PTRACE_SINGLESTEP
     //如果是BL BLR ，在PC+4 设置一个临时断点，然后 go
@@ -388,9 +391,8 @@ long step_over(pid_t pid){
 }
 
 
-ssize_t read_memory(pid_t pid, void *target_address, size_t len, void *save_buffer) {
-    LOG_ENTER();
-    LOG("target_address :%p ,len:%zu ,save_buffer :%p",target_address,len,save_buffer);
+ssize_t read_memory_vm(pid_t pid, void *target_address, size_t len, void *save_buffer) {
+    LOG_ENTER("(pid=%d, target_address=%p, len=%zu, save_buffer=%p)", pid, target_address, len, save_buffer);
 
 
     iovec local{save_buffer,len};
@@ -402,9 +404,8 @@ ssize_t read_memory(pid_t pid, void *target_address, size_t len, void *save_buff
     return result;
 }
 
-ssize_t write_memory(pid_t pid, void *target_address, void *write_data, size_t len) {
-    LOG_ENTER();
-    LOG("target_address :%p ,len:%zu ,write_data :%p",target_address,len,write_data);
+ssize_t write_memory_vm(pid_t pid, void *target_address, void *write_data, size_t len) {
+    LOG_ENTER("(pid=%d, target_address=%p, write_data=%p, len=%zu)", pid, target_address, write_data, len);
 
     // 先尝试直接写入
     iovec local{write_data, len};
@@ -441,11 +442,48 @@ ssize_t write_memory(pid_t pid, void *target_address, void *write_data, size_t l
     return result;
 }
 
-void disasm_addr(pid_t  pid, void* target_addr) {
-    LOG_ENTER();
+ssize_t write_memory_ptrace(pid_t pid, void *target_address, void *write_data, size_t len) {
+    LOG_ENTER("(pid=%d, target_address=%p, write_data=%p, len=%zu)", pid, target_address, write_data, len);
 
-    uint64_t pc_value {};
-    uint8_t code[4]{};
+    uint8_t *data = (uint8_t*)write_data;
+    uintptr_t addr = (uintptr_t)target_address;
+    size_t bytes_written = 0;
+
+    while(bytes_written < len){
+        uintptr_t aligned_start =  addr & ~(sizeof(long) - 1);//向前对齐
+        size_t offset_in_word = addr - aligned_start;//对齐后多写的差值
+
+        //用 VM 读取
+        uintptr_t orig_data = 0;
+        if (read_memory_vm(pid, (void*)aligned_start, sizeof(long), &orig_data) != sizeof(uintptr_t)) {
+            LOGE("write_memory_ptrace 读失败 0x%lx", aligned_start);
+            return -1;
+        }
+
+        // 计算本次写入长度
+        size_t copy_len = std::min(len - bytes_written, sizeof(uintptr_t) - offset_in_word);
+
+        // 修改需要的字节
+        memcpy((uint8_t*)&orig_data + offset_in_word, data + bytes_written, copy_len);
+
+        //ptrace 写回
+        if (ptrace(PTRACE_POKETEXT, pid, (void*)aligned_start, (void*)orig_data) == -1) {
+            LOGE("PTRACE_POKETEXT 失败 at 0x%lx: %s", aligned_start, strerror(errno));
+            return -1;
+        }
+
+        bytes_written += copy_len;
+        addr += copy_len;
+    }
+
+    LOG("ptrace write success: %zu bytes", bytes_written);
+    return (ssize_t)bytes_written;
+}
+
+void disasm_lines(pid_t pid, void* target_addr, size_t line) {
+    LOG_ENTER("(pid=%d, target_addr=%p, line=%zu)", pid, target_addr, line);
+
+    uint64_t pc_value = 0;
 
     if(target_addr != nullptr){
         pc_value = (uint64_t)target_addr;//指定反汇编地址
@@ -453,14 +491,20 @@ void disasm_addr(pid_t  pid, void* target_addr) {
         get_reg(pid,"pc",&pc_value);//获取当前pc
     }
 
-    if(-1 != read_memory(pid, (void*)pc_value, sizeof(code), (void*)code)) {
-        disasm(code, sizeof(code), pc_value);
+    // 逐条反汇编，每条4字节
+    for(size_t i = 0; i < line; i++) {
+        uint8_t code[4] = {0};
+        uint64_t current_addr = pc_value + (i * 4);
+        
+        if(read_memory_vm(pid, (void*)current_addr, sizeof(code), code) == sizeof(code)) {
+            disasm(code, sizeof(code), current_addr);
+        } 
     }
 }
 
 bool bp_set(pid_t pid, void *address) {
-    LOG_ENTER();
-    const uint32_t BRK = 0xD4200000;
+    LOG_ENTER("(pid=%d, address=%p)", pid, address);
+    uint32_t BRK = 0xD4200000;
 
     do{
         //已存在 跳过
@@ -469,12 +513,12 @@ bool bp_set(pid_t pid, void *address) {
         }
 
         uint32_t orig  = 0;
-        if (read_memory(pid, address, 4,&orig)!= 4) break;
-        if (write_memory(pid, address, &BRK, 4) != 4)  break;
+        if (read_memory_vm(pid, address, 4, &orig) != 4) break;
+        if (write_memory_ptrace(pid, address, &BRK, 4) != 4)  break;
 
         breakpoint newbp{address,orig};
         g_bp_vec.emplace_back(newbp);
-        print_singel_bp(g_bp_vec.size());
+        print_singel_bp(g_bp_vec.size()-1);
         return true;
 
     }while(0);
@@ -484,11 +528,11 @@ bool bp_set(pid_t pid, void *address) {
 }
 
 bool bp_clear(pid_t pid, size_t index) {
-    LOG_ENTER();
+    LOG_ENTER("(pid=%d, index=%zu)", pid, index);
 
     breakpoint& bp = g_bp_vec[index];
 
-    if (write_memory(pid, bp.address, bp.origin_inst,4) != 0) {
+    if (write_memory_ptrace(pid, bp.address, (void *) &bp.origin_inst, 4) != 4) {
         LOGE("bp_clear 写回指令失败");
         return false;
     }
@@ -498,7 +542,7 @@ bool bp_clear(pid_t pid, size_t index) {
 }
 
 void bp_show() {
-    LOG_ENTER();
+    LOG_ENTER("");
 
     for (size_t i = 0; i < g_bp_vec.size(); ++i) {
         print_singel_bp(i);
@@ -514,3 +558,5 @@ void print_singel_bp(size_t index) {
            (unsigned long)bp.address,
            bp.origin_inst);
 }
+
+
