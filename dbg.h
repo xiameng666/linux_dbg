@@ -33,15 +33,34 @@ long resume_process(pid_t pid);
 int suspend_process(pid_t pid);
 void parse_thread_signal(pid_t pid);
 
-// 单步调试  先等我完成反汇编
+//
 long step_into(pid_t pid);
 long step_over(pid_t pid);
+
+//
+long bp_set(pid_t pid,void* address);
+bool bp_clear(void* address);
+void bp_show();
+
+struct breakpoint{
+    void* address;
+    uint32_t origin_inst;
+    bool enabled;
+};
+static std::vector<breakpoint> g_bp_vec;
 
 // 寄存器
 long get_reg(pid_t pid, const char* reg_name, uint64_t* value);
 long set_reg(pid_t pid, const char* reg_name, uint64_t value);
 bool print_all_regs(pid_t pid); 
 void print_single_reg(const std::string& reg_name, uint64_t value);
+
+//
+ssize_t read_memory(pid_t pid, void* target_address, size_t len, void* save_buffer);
+ssize_t write_memory(pid_t pid, void* target_address, void* write_data, size_t len);
+
+//
+void disasm_addr(pid_t  pid, void* target_addr = nullptr);
 
 //解析map数据并存储
 void parse_map(pid_t pid);

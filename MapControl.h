@@ -172,58 +172,6 @@ public:
         return true;
     }
 
-    inline ssize_t read_memory(pid_t pid, void* target_address, size_t len, void* save_buffer) {
-        LOG_ENTER();
-        LOG("target_address :%p ,len:%zu ,save_buffer :%p",target_address,len,save_buffer);
-
-
-        iovec local{save_buffer,len};
-        iovec remote{target_address,len};
-        ssize_t result = process_vm_readv(pid,&local,1,&remote,1,0);
-        if (result == -1) {
-            LOGE("process_vm_readv failed: %s", strerror(errno));
-        }
-        return result;
-    }
-
-    inline ssize_t write_memory(pid_t pid, void* target_address, void* write_data, size_t len) {
-        LOG_ENTER();
-        LOG("target_address :%p ,len:%zu ,write_data :%p",target_address,len,write_data);
-
-        // 先尝试直接写入
-        iovec local{write_data, len};
-        iovec remote{target_address, len};
-        ssize_t result = process_vm_writev(pid, &local, 1, &remote, 1, 0);
-
-        if (result != -1) {
-            LOG("直接写入成功: %zd bytes", result);
-        }else{
-            LOGE("process_vm_writev failed: %s", strerror(errno));
-        }
-
-        /*
-        LOG("Direct write failed, trying with permission change...");
-
-        MapControl mapControl(pid);
-
-        // 修改权限
-        bool perm_changed = mapControl.change_map_permissions(target_address, len, PROT_READ | PROT_WRITE);
-        if (!perm_changed) {
-            LOG("Permission change failed, but continuing...");
-        }
-
-        // 再次写入
-        result = process_vm_writev(pid, &local, 1, &remote, 1, 0);
-
-        //恢复修改的权限
-        mapControl.resume_map_permissions();
-
-        if (result == -1) {
-            LOGE("process_vm_writev failed: %s", strerror(errno));
-        }
-    */
-        return result;
-    }
 };
 
 

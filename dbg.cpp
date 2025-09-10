@@ -2,6 +2,7 @@
 // Created by XiaM on 2025/9/9.
 //
 #include "dbg.h"
+#include "disasm.h"
 
 
 static const std::unordered_map<std::string, size_t> reg_map = {
@@ -80,14 +81,17 @@ void parse_thread_signal(pid_t pid) {
 
     if (WIFSTOPPED(status)) {
         int sig = WSTOPSIG(status);
-        LOG("stopped: tid=%d sig=%d", r, sig);
         siginfo_t info{};
-        LOG("si_signo=%d si_code=%d si_pid=%d", info.si_signo, info.si_code, info.si_pid);
-    } else if (WIFEXITED(status)) {
+        ptrace(PTRACE_GETSIGINFO, pid, 0, &info);
+        LOG("stopped:si_signo=%d si_code=%d si_pid=%d", info.si_signo, info.si_code, info.si_pid);
+    }
+    else if (WIFEXITED(status)) {
         LOG("exited: tid=%d code=%d", r, WEXITSTATUS(status));
-    } else if (WIFSIGNALED(status)) {
+    }
+    else if (WIFSIGNALED(status)) {
         LOG("signaled: tid=%d sig=%d", r, WTERMSIG(status));
-    } else if (WIFCONTINUED(status)) {
+    }
+    else if (WIFCONTINUED(status)) {
         LOG("continued: tid=%d", r);
     }
 }
@@ -255,24 +259,44 @@ void command_loop(pid_t pid) {
                 }
             }
         }
+        else if(inst == "u") {
+            if(args_vec.size() == 2){
+               void*  pc_value = (void*)std::stoull(args_vec[1], nullptr,16);
+                disasm_addr(pid,pc_value);
+            }else{
+                //当前pc反汇编
+                disasm_addr(pid);
+            }
+
+        }
         else if(inst == "s") {
             //步入
             step_into(pid);
+            parse_thread_signal(pid);
+            disasm_addr(pid);
 
         }
         else if(inst == "n") {
             //步过
             step_over(pid);
+            parse_thread_signal(pid);
+            disasm_addr(pid);
 
+        }
+        else if (inst == "bp"){
+            uint64_t addr = std::stoull(args_vec[1], nullptr, 0);
+            bp_set(pid, (void*)addr);
         }
         else if(inst == "map") {
             mapControl.print_maps();
+
         }
         else if(inst == "prot") {
             void *address= (void*)std::stoull(args_vec[1], nullptr,16);
             size_t len = std::stoul(args_vec[2], nullptr,0);
             int prot = std::stoi(args_vec[3], nullptr,0);
             mapControl.change_map_permissions(address,len,prot);
+
         }
 
         else if(inst == "mr"){
@@ -280,7 +304,7 @@ void command_loop(pid_t pid) {
             //[mr addr len] 读取内存
             void *address= (void*)std::stoull(args_vec[1], nullptr,16);
             size_t len = std::stoul(args_vec[2], nullptr,0);
-            mapControl.read_memory(pid, address, len, read_memory_buffer);
+            read_memory(pid, address, len, read_memory_buffer);
 
         }
         else if(inst == "mw"){
@@ -292,7 +316,7 @@ void command_loop(pid_t pid) {
                                return (uint8_t)std::stoull(s, nullptr, 16);  // 强制16进制
                            });
 
-            ssize_t written = mapControl.write_memory(pid, (void*)address, bytes.data(), bytes.size());
+            ssize_t written = write_memory(pid, (void*)address, bytes.data(), bytes.size());
             std::cout << "write " << written << " bytes\n";
 
         }
@@ -343,9 +367,114 @@ long step_into(pid_t pid) {
 }
 
 long step_over(pid_t pid){
-    //TODO
+    LOG_ENTER();
+
+    //非调用指令：直接单步 PTRACE_SINGLESTEP
+    //如果是BL BLR ，在PC+4 设置一个临时断点，然后 go
 
     return 0;
 }
 
 
+ssize_t read_memory(pid_t pid, void *target_address, size_t len, void *save_buffer) {
+    LOG_ENTER();
+    LOG("target_address :%p ,len:%zu ,save_buffer :%p",target_address,len,save_buffer);
+
+
+    iovec local{save_buffer,len};
+    iovec remote{target_address,len};
+    ssize_t result = process_vm_readv(pid,&local,1,&remote,1,0);
+    if (result == -1) {
+        LOGE("process_vm_readv failed: %s", strerror(errno));
+    }
+    return result;
+}
+
+ssize_t write_memory(pid_t pid, void *target_address, void *write_data, size_t len) {
+    LOG_ENTER();
+    LOG("target_address :%p ,len:%zu ,write_data :%p",target_address,len,write_data);
+
+    // 先尝试直接写入
+    iovec local{write_data, len};
+    iovec remote{target_address, len};
+    ssize_t result = process_vm_writev(pid, &local, 1, &remote, 1, 0);
+
+    if (result != -1) {
+        LOG("直接写入成功: %zd bytes", result);
+    }else{
+        LOGE("process_vm_writev failed: %s", strerror(errno));
+    }
+
+    /*
+    LOG("Direct write failed, trying with permission change...");
+
+    MapControl mapControl(pid);
+
+    // 修改权限
+    bool perm_changed = mapControl.change_map_permissions(target_address, len, PROT_READ | PROT_WRITE);
+    if (!perm_changed) {
+        LOG("Permission change failed, but continuing...");
+    }
+
+    // 再次写入
+    result = process_vm_writev(pid, &local, 1, &remote, 1, 0);
+
+    //恢复修改的权限
+    mapControl.resume_map_permissions();
+
+    if (result == -1) {
+        LOGE("process_vm_writev failed: %s", strerror(errno));
+    }
+*/
+    return result;
+}
+
+void disasm_addr(pid_t  pid, void* target_addr) {
+    LOG_ENTER();
+
+    uint64_t pc_value {};
+    uint8_t code[4]{};
+
+    if(target_addr != nullptr){
+        pc_value = (uint64_t)target_addr;//指定反汇编地址
+    }else{
+        get_reg(pid,"pc",&pc_value);//获取当前pc
+    }
+
+    if(-1 != read_memory(pid, (void*)pc_value, sizeof(code), (void*)code)) {
+        disasm(code, sizeof(code), pc_value);
+    }
+}
+
+long bp_set(pid_t pid, void *address) {
+    LOG_ENTER();
+
+    //已存在 跳过
+    for(auto& bp:g_bp_vec){
+        if(bp.address == address && enabled) return 0;
+    }
+
+    uint32_t orig  = 0;
+    if (read_memory(pid, address, &orig) != 0) return -1;
+
+    const uint32_t BRK = 0xD4200000;
+    if (write_memory(pid, address, BRK) != 0) return -1;
+
+    g_bp_vec.emplace_back(breakpoint(address,orig,true));
+    return 0;
+}
+
+bool bp_clear(void *address) {
+    LOG_ENTER();
+
+    return false;
+}
+
+void bp_show() {
+    LOG_ENTER();
+
+    for (size_t i = 0; i < g_bp_vec.size(); ++i) {
+        const auto& bp = g_breakpoints[i];
+        printf("[%zu] addr=0x%016lx enabled=%d\n",i, (unsigned long)bp.address, (int)bp.enabled);
+    }
+}
