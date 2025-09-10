@@ -6,7 +6,7 @@
 #define LINUX_DBG_DISASM_H
 #include "capstone/capstone.h"
 
-void disasm(const uint8_t *code ,size_t code_size, uint64_t address){
+void disasm(const uint8_t *code ,size_t code_size, uint64_t address,bool isbp = false){
     csh  handle;
     cs_err error = cs_open(CS_ARCH_AARCH64,CS_MODE_ARM,&handle);
     if(error != CS_ERR_OK){
@@ -24,8 +24,12 @@ void disasm(const uint8_t *code ,size_t code_size, uint64_t address){
         cs_close(&handle);
         return;
     }
+    if(isbp){
+        printf("%p %s %s [Breakpoint]\r\n",address,insn[0].mnemonic,insn[0].op_str);
+    }else{
+        printf("%p %s %s\r\n",address,insn[0].mnemonic,insn[0].op_str);
+    }
 
-    printf("%p %s %s\r\n",address,insn[0].mnemonic,insn[0].op_str);
 
     cs_free(insn,1);
     cs_close(&handle);

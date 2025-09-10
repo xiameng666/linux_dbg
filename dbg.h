@@ -42,6 +42,8 @@ bool bp_set(pid_t pid,void* address);
 bool bp_clear(pid_t pid, size_t index);
 void bp_show();
 void print_singel_bp(size_t index);
+void bp_temp_disable(pid_t pid, void* address);  // 临时禁用断点
+void bp_restore_temp_disabled(pid_t pid);  // 恢复临时禁用的断点
 
 struct breakpoint{
     void* address;
@@ -62,7 +64,7 @@ ssize_t read_memory_vm(pid_t pid, void* target_address, size_t len, void* save_b
 ssize_t write_memory_vm(pid_t pid, void* target_address, void* write_data, size_t len);
 
 //
-void disasm_lines(pid_t pid, void* target_addr = nullptr, size_t line = 5);
+void disasm_lines(pid_t pid, void* target_addr = nullptr, size_t line = 5, bool is_continue = false);
 
 //解析map数据并存储
 void parse_map(pid_t pid);

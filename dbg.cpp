@@ -4,8 +4,10 @@
 #include "dbg.h"
 #include "disasm.h"
 
-
+// 全局状态：记录上次反汇编的地址，用于连续反汇编
 static uint64_t g_last_disasm_addr = 0;
+// 临时禁用的断点地址
+static void* g_temp_disabled_bp = nullptr;
 
 static const std::unordered_map<std::string, size_t> reg_map = {
         // 通用寄存器
@@ -92,6 +94,12 @@ void parse_thread_signal(pid_t pid) {
             uint64_t pc = 0;
             if (get_reg(pid, "pc", &pc) == 0) {
                 LOG("命中断点 PC=0x%lx", pc);
+                g_last_disasm_addr = 0; // 重置为0，下次u命令会从当前PC开始
+                
+                // 临时禁用当前断点，避免 g 命令时立即再次触发
+                bp_temp_disable(pid, (void*)pc);
+                
+                print_all_regs(pid);
                 //handle_breakpoint_hit(pid, (void*)pc);
             }
         }
@@ -229,7 +237,15 @@ void command_loop(pid_t pid) {
         std::transform(inst.begin(), inst.end(), inst.begin(), ::tolower);
 
         if(inst == "g"){
-            //恢复
+            // 如果有临时禁用的断点
+            if (g_temp_disabled_bp != nullptr) {
+                // 单步执行跳过当前断点指令
+                step_into(pid);
+                parse_thread_signal(pid);
+                // 然后恢复断点
+                bp_restore_temp_disabled(pid);
+            }
+            // 恢复执行
             resume_process(pid);
             parse_thread_signal(pid);
 
@@ -266,28 +282,35 @@ void command_loop(pid_t pid) {
         else if(inst == "u") {
             if(args_vec.size() == 2){
                void*  pc_value = (void*)std::stoull(args_vec[1], nullptr,16);
-                disasm_lines(pid, pc_value);
+                disasm_lines(pid, pc_value,5,true);
             }else{
-                //当前pc反汇编
-                disasm_lines(pid);
+                // u - 连续反汇编
+                disasm_lines(pid, nullptr, 5, true);
             }
 
         }
         else if(inst == "s") {
             //步入
+            // 先恢复临时禁用的断点
+            bp_restore_temp_disabled(pid);
+
             step_into(pid);
             parse_thread_signal(pid);
-            disasm_lines(pid);
+            // 重置反汇编状态到当前PC，并显示当前指令
+            disasm_lines(pid, nullptr, 1, false);
 
         }
         else if(inst == "n") {
             //步过
+            // 先恢复临时禁用的断点
+            bp_restore_temp_disabled(pid);
             step_over(pid);
             parse_thread_signal(pid);
-            disasm_lines(pid);
+            // 重置反汇编状态到当前PC，并显示当前指令
+            disasm_lines(pid, nullptr, 1, false);
 
         }
-        else if (inst == "bp"){
+        else if (inst == "bp") {
             uint64_t addr = std::stoull(args_vec[1], nullptr, 16);
             bp_set(pid, (void*)addr);
 
@@ -480,15 +503,22 @@ ssize_t write_memory_ptrace(pid_t pid, void *target_address, void *write_data, s
     return (ssize_t)bytes_written;
 }
 
-void disasm_lines(pid_t pid, void* target_addr, size_t line) {
-    LOG_ENTER("(pid=%d, target_addr=%p, line=%zu)", pid, target_addr, line);
+void disasm_lines(pid_t pid, void* target_addr, size_t line, bool is_continue) {
+    LOG_ENTER("(pid=%d, target_addr=%p, line=%zu, is_continue=%d)", pid, target_addr, line, is_continue);
 
     uint64_t pc_value = 0;
 
-    if(target_addr != nullptr){
-        pc_value = (uint64_t)target_addr;//指定反汇编地址
-    }else{
-        get_reg(pid,"pc",&pc_value);//获取当前pc
+    if (target_addr != nullptr) {
+        // 指定了具体地址，重置全局状态
+        pc_value = (uint64_t)target_addr;
+        g_last_disasm_addr = pc_value;
+    } else if (is_continue && g_last_disasm_addr != 0) {
+        // 连续反汇编，从上次位置继续
+        pc_value = g_last_disasm_addr;
+    } else {
+        // 重置到当前PC
+        get_reg(pid, "pc", &pc_value);
+        g_last_disasm_addr = pc_value;
     }
 
     // 逐条反汇编，每条4字节
@@ -497,8 +527,29 @@ void disasm_lines(pid_t pid, void* target_addr, size_t line) {
         uint64_t current_addr = pc_value + (i * 4);
         
         if(read_memory_vm(pid, (void*)current_addr, sizeof(code), code) == sizeof(code)) {
-            disasm(code, sizeof(code), current_addr);
+            // 检查是否是断点地址
+            bool is_breakpoint = false;
+            uint32_t original_inst = 0;
+            for(const auto& bp : g_bp_vec) {
+                if((uint64_t)bp.address == current_addr) {
+                    is_breakpoint = true;
+                    original_inst = bp.origin_inst;
+                    break;
+                }
+            }
+            
+            if(is_breakpoint) {
+                // 使用原始指令进行反汇编
+                disasm((uint8_t*)&original_inst, 4, current_addr,is_breakpoint);
+            } else {
+                disasm(code, sizeof(code), current_addr);
+            }
         } 
+    }
+    
+    // 更新下次反汇编的起始地址
+    if (is_continue || target_addr != nullptr) {
+        g_last_disasm_addr = pc_value + (line * 4);
     }
 }
 
@@ -516,7 +567,7 @@ bool bp_set(pid_t pid, void *address) {
         if (read_memory_vm(pid, address, 4, &orig) != 4) break;
         if (write_memory_ptrace(pid, address, &BRK, 4) != 4)  break;
 
-        breakpoint newbp{address,orig};
+        breakpoint newbp{address, orig};
         g_bp_vec.emplace_back(newbp);
         print_singel_bp(g_bp_vec.size()-1);
         return true;
@@ -557,6 +608,39 @@ void print_singel_bp(size_t index) {
            index,
            (unsigned long)bp.address,
            bp.origin_inst);
+}
+
+// 临时禁用指定地址的断点（写回原始指令）
+void bp_temp_disable(pid_t pid, void* address) {
+    LOG_ENTER("(pid=%d, address=%p)", pid, address);
+    
+    for (const auto& bp : g_bp_vec) {
+        if (bp.address == address) {
+            // 写回原始指令
+            if (write_memory_ptrace(pid, bp.address, (void*)&bp.origin_inst, 4) == 4) {
+                g_temp_disabled_bp = address;
+                LOG("临时禁用断点: 0x%lx", (unsigned long)address);
+            } else {
+                LOGE("禁用断点失败: 0x%lx", (unsigned long)address);
+            }
+            break;
+        }
+    }
+}
+
+// 恢复临时禁用的断点（重新写入BRK指令）
+void bp_restore_temp_disabled(pid_t pid) {
+    LOG_ENTER("(pid=%d)", pid);
+    
+    if (g_temp_disabled_bp != nullptr) {
+        uint32_t BRK = 0xD4200000;
+        if (write_memory_ptrace(pid, g_temp_disabled_bp, (void*)&BRK, 4) == 4) {
+            LOG("恢复临时禁用的断点: 0x%lx", (unsigned long)g_temp_disabled_bp);
+            g_temp_disabled_bp = nullptr;
+        } else {
+            LOGE("恢复断点失败: 0x%lx", (unsigned long)g_temp_disabled_bp);
+        }
+    }
 }
 
 
