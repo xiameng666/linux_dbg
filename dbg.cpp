@@ -258,6 +258,7 @@ void command_loop(pid_t pid) {
                     std::cout << "Invalid value: " << args_vec[2] << "\n";
                 }
             }
+
         }
         else if(inst == "u") {
             if(args_vec.size() == 2){
@@ -286,11 +287,22 @@ void command_loop(pid_t pid) {
         else if (inst == "bp"){
             uint64_t addr = std::stoull(args_vec[1], nullptr, 0);
             bp_set(pid, (void*)addr);
+
+        }
+        else if (inst == "bpl") {
+            bp_show();
+
+        }
+        else if (inst == "bpc") {
+            size_t index = (size_t)std::stoul(args_vec[1], nullptr, 10);
+            bp_clear(pid, index);
+
         }
         else if(inst == "map") {
             mapControl.print_maps();
 
         }
+
         else if(inst == "prot") {
             void *address= (void*)std::stoull(args_vec[1], nullptr,16);
             size_t len = std::stoul(args_vec[2], nullptr,0);
@@ -446,35 +458,59 @@ void disasm_addr(pid_t  pid, void* target_addr) {
     }
 }
 
-long bp_set(pid_t pid, void *address) {
+bool bp_set(pid_t pid, void *address) {
     LOG_ENTER();
-
-    //已存在 跳过
-    for(auto& bp:g_bp_vec){
-        if(bp.address == address && enabled) return 0;
-    }
-
-    uint32_t orig  = 0;
-    if (read_memory(pid, address, &orig) != 0) return -1;
-
     const uint32_t BRK = 0xD4200000;
-    if (write_memory(pid, address, BRK) != 0) return -1;
 
-    g_bp_vec.emplace_back(breakpoint(address,orig,true));
-    return 0;
+    do{
+        //已存在 跳过
+        for(auto& bp:g_bp_vec){
+            if(bp.address == address) return true;
+        }
+
+        uint32_t orig  = 0;
+        if (read_memory(pid, address, 4,&orig)!= 4) break;
+        if (write_memory(pid, address, &BRK, 4) != 4)  break;
+
+        breakpoint newbp{address,orig};
+        g_bp_vec.emplace_back(newbp);
+        print_singel_bp(g_bp_vec.size());
+        return true;
+
+    }while(0);
+
+    LOGE("bp_set 失败");
+    return false;
 }
 
-bool bp_clear(void *address) {
+bool bp_clear(pid_t pid, size_t index) {
     LOG_ENTER();
 
-    return false;
+    breakpoint& bp = g_bp_vec[index];
+
+    if (write_memory(pid, bp.address, bp.origin_inst,4) != 0) {
+        LOGE("bp_clear 写回指令失败");
+        return false;
+    }
+
+    g_bp_vec.erase(g_bp_vec.begin() + index);
+    return true;
 }
 
 void bp_show() {
     LOG_ENTER();
 
     for (size_t i = 0; i < g_bp_vec.size(); ++i) {
-        const auto& bp = g_breakpoints[i];
-        printf("[%zu] addr=0x%016lx enabled=%d\n",i, (unsigned long)bp.address, (int)bp.enabled);
+        print_singel_bp(i);
     }
+}
+
+
+
+void print_singel_bp(size_t index) {
+    const auto& bp = g_bp_vec[index];
+    printf("[%zu] addr=0x%016lx inst=0x%08x\n",
+           index,
+           (unsigned long)bp.address,
+           bp.origin_inst);
 }

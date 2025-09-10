@@ -38,14 +38,14 @@ long step_into(pid_t pid);
 long step_over(pid_t pid);
 
 //
-long bp_set(pid_t pid,void* address);
-bool bp_clear(void* address);
+bool bp_set(pid_t pid,void* address);
+bool bp_clear(pid_t pid, size_t index);
 void bp_show();
+void print_singel_bp(size_t index);
 
 struct breakpoint{
     void* address;
     uint32_t origin_inst;
-    bool enabled;
 };
 static std::vector<breakpoint> g_bp_vec;
 
