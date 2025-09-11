@@ -24,7 +24,8 @@ add_executable(${CMAKE_PROJECT_NAME}
         # List C/C++ source files with relative paths to this CMakeLists.txt.
         main.cpp
         dbg_core.cpp
-        dbg_command.cpp)
+        dbg_command.cpp
+        trace.cpp)
 
 if (TARGET capstone-static)
     set(CAPSTONE_LIB capstone-static)

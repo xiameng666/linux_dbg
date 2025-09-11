@@ -19,7 +19,8 @@ static std::unordered_map<std::string, CommandHandler> command_table = {
         {"prot", cmd_protect},
         {"mr", cmd_memory_read},
         {"mw", cmd_memory_write},
-        {"help", cmd_help}
+        {"help", cmd_help},
+        {"trace", cmd_trace}
 };
 
 // 重构后的主循环 - 完全保留你的原始逻辑
@@ -55,18 +56,19 @@ void command_loop(pid_t pid) {
     }
 }
 
-// 各个命令的实现 - 完全保留你的原始逻辑，只是提取为独立函数
-
 void cmd_continue(pid_t pid, const std::vector<std::string>& args) {
-    // 这是你原来的 if(inst == "g") 里面的代码，完全不变
-    if (g_temp_disabled_bp != nullptr) {
+    //parse_sign中收到TRAP_BRKPT->临时禁用断点
+    //cmd_continue中先单步一次执行原始指令 → 收到单步 SIGTRAP → 再把断点恢复 → go。
+
+    if (g_pcb.temp_disabled_bp != nullptr) {
         // 单步执行跳过当前断点指令
         step_into(pid);
         parse_thread_signal(pid);
         // 然后恢复断点
         bp_restore_temp_disabled(pid);
     }
-    // 恢复执行
+
+    // go
     resume_process(pid);
     parse_thread_signal(pid);
 }
@@ -115,30 +117,30 @@ void cmd_disasm(pid_t pid, const std::vector<std::string>& args) {
 }
 
 void cmd_step_into(pid_t pid, const std::vector<std::string>& args) {
-    // 这是你原来的 else if(inst == "s") 里面的代码，完全不变
-    //步入
-    // 先恢复临时禁用的断点
-    bp_restore_temp_disabled(pid);
-
-    step_into(pid);
-
-    parse_thread_signal(pid);
+    // 如果有临时禁用的断点，先单步执行原始指令，再恢复断点
+    if (g_pcb.temp_disabled_bp != nullptr) {
+        step_into(pid);
+        parse_thread_signal(pid);      // 等到单步SIGTRAP
+        bp_restore_temp_disabled(pid); // 恢复断点
+    } else {
+        step_into(pid);
+        parse_thread_signal(pid);
+    }
 
     // 重置反汇编状态到当前PC，并显示当前指令
     disasm_lines(pid, nullptr, 1, false);
 }
 
 void cmd_step_over(pid_t pid, const std::vector<std::string>& args) {
-    // 这是你原来的 else if(inst == "n") 里面的代码，完全不变
-    //步过
-    // 先恢复临时禁用的断点
-    bp_restore_temp_disabled(pid);
+    if (g_pcb.temp_disabled_bp != nullptr) {
+        step_into(pid);
+        parse_thread_signal(pid);
+        bp_restore_temp_disabled(pid);
+    } else {
+        step_over(pid);
+        parse_thread_signal(pid);
+    }
 
-    step_over(pid);
-
-    parse_thread_signal(pid);
-
-    // 重置反汇编状态到当前PC，并显示当前指令
     disasm_lines(pid, nullptr, 1, false);
 }
 
@@ -220,4 +222,11 @@ void cmd_help(pid_t pid, const std::vector<std::string>& args) {
     std::cout << "  mr <addr> <len> - Read memory\n";
     std::cout << "  mw <addr> <bytes...> - Write memory\n";
     std::cout << "  help       - Show this help\n";
+}
+
+void cmd_trace(pid_t pid, const std::vector<std::string> &args) {
+    auto start= (uintptr_t)std::stoull(args[1], nullptr,16);
+    auto end= (uintptr_t)std::stoull(args[2], nullptr,16);
+
+    trace_start(start,end);
 }
