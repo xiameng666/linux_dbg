@@ -109,24 +109,24 @@ void parse_thread_signal(pid_t pid) {
         LOG("单步完成 PC=0x%lx", pc);
     }
 
-// Trace 模式：无限单步，命中区间才写
+// Trace 模式：精确匹配起始和结束地址
     if(g_pcb.trace_enabled){
-        // 计算是否在追踪区间
-        bool in_range = (pc >= g_pcb.trace_begin && pc <= g_pcb.trace_end);
-
-        //第一次进入区间 标记
-        if (!g_pcb.did_into && in_range) {
-            g_pcb.did_into = true;
-        }
-
-        //进入过区间 但是出区间了 不再trace
-        if (g_pcb.did_into && !in_range){
-            trace_stop();
+        // 检查是否到达结束地址
+        if (pc == g_pcb.trace_end) {
+            LOG("Trace完成：到达结束地址 0x%lx", pc);
+            trace_log_step(pid);  // 记录结束地址的指令
+            trace_reset();
             return;
         }
 
-        //在区间内 记录指令
-        if ( in_range) {
+        // 开始trace：第一次命中起始地址或已经开始了trace
+        if (pc == g_pcb.trace_begin || g_pcb.trace_ever_into) {
+            if (!g_pcb.trace_ever_into) {
+                LOG("Trace开始：命中起始地址 0x%lx", pc);
+                g_pcb.trace_ever_into = true;
+            }
+            
+            // 记录当前指令
             trace_log_step(pid);
         }
 
@@ -662,18 +662,15 @@ void trace_start(uintptr_t start, uintptr_t end) {
     g_pcb.trace_end = end;
     g_pcb.trace_enabled = true;
 
-    // 特殊：如果传入 -1 作为 begin 表示退出时关闭文件
-    if (g_pcb.trace_fp && start == (uintptr_t)-1) {
-        // flush & close
-        std::fflush(g_pcb.trace_fp);
-        std::fclose(g_pcb.trace_fp);
-        g_pcb.trace_fp = nullptr;
-        return;
-    }
 
     if (g_pcb.trace_fp) return;
 
-    g_pcb.trace_fp = std::fopen("trace.log", "w");
+    char filename[128];
+    std::snprintf(filename, sizeof(filename),
+                  "trace_%016lx_%016lx.log",
+                  (unsigned long)start, (unsigned long)end);
+
+    g_pcb.trace_fp = std::fopen(filename, "w");
     if (!g_pcb.trace_fp) {
         LOGE("Trace.start fp 打开失败");
     }
@@ -696,11 +693,14 @@ void trace_log_step(pid_t pid) {
     std::fflush(g_pcb.trace_fp);
 }
 
-void trace_stop() {
+void trace_reset() {
     if (g_pcb.trace_fp) {
         std::fflush(g_pcb.trace_fp);
         std::fclose(g_pcb.trace_fp);
         g_pcb.trace_fp = nullptr;
     }
     g_pcb.trace_enabled = false;
+    g_pcb.trace_ever_into = false;
+    g_pcb.trace_begin = 0;
+    g_pcb.trace_end = 0;
 }

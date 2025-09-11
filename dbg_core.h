@@ -41,7 +41,7 @@ struct PCB{
     uintptr_t trace_begin = 0;
     uintptr_t trace_end = 0;
     bool trace_enabled = false;
-    int into_times = 0; // 进入区间的次数（用于统计/控制）
+    bool trace_ever_into= false; //进入过trace区间吗
     FILE* trace_fp = nullptr;
 };
 extern PCB g_pcb;
@@ -101,7 +101,7 @@ std::vector<std::string> split_space(const std::string& s);
 void hexdump(const void* data, size_t size, uintptr_t base_addr = 0);
 
 void trace_start(uintptr_t begin, uintptr_t end);
-void trace_stop();
+void trace_reset();
 void trace_log_step(pid_t pid);
 // 全局当前调试进程PID
 extern pid_t g_current_pid;
