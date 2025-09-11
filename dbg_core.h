@@ -41,8 +41,12 @@ struct PCB{
     uintptr_t trace_begin = 0;
     uintptr_t trace_end = 0;
     bool trace_enabled = false;
-    bool trace_ever_into= false; //进入过trace区间吗
+    bool trace_ever_into= false; //是否进入过trace区间
+    bool trace_need_continue = false; //trace是否需要继续单步
     FILE* trace_fp = nullptr;
+    
+    // 🔧 信号等待控制
+    bool need_wait_signal = false; //是否需要等待进程信号
 };
 extern PCB g_pcb;
 

@@ -10,12 +10,11 @@ int main(){
 
     attach_process(pid);
 
-    parse_thread_signal(pid);
+    g_pcb.need_wait_signal = true;
 
     command_loop(pid);
 
     resume_process(pid);
-
 
     return 0;
 }

@@ -6,7 +6,7 @@
 // 命令映射表
 static std::unordered_map<std::string, CommandHandler> command_table = {
         {"g", cmd_continue},
-        {"p", cmd_parse},
+        // ✅ 移除"p"命令，parse_thread_signal现在在command_loop中自动调用
         {"stop", cmd_stop},
         {"r", cmd_registers},
         {"u", cmd_disasm},
@@ -23,13 +23,31 @@ static std::unordered_map<std::string, CommandHandler> command_table = {
         {"trace", cmd_trace}
 };
 
-// 重构后的主循环 - 完全保留你的原始逻辑
+// ✅ 重构后的主循环 - 智能信号等待架构
 void command_loop(pid_t pid) {
     MapControl mapControl(pid);
     uint8_t read_memory_buffer[0x1000];
     std::string cmdline;
 
     while(true){
+        // 🔧 反向逻辑：默认等待信号（只有特定命令会禁用）
+        if (g_pcb.need_wait_signal) {
+            parse_thread_signal(pid);
+            
+            // 检查trace是否需要继续（trace模式下的自动单步）
+            if (g_pcb.trace_enabled && g_pcb.trace_need_continue) {
+                g_pcb.trace_need_continue = false;
+                step_into(pid);
+                continue;  // 继续下一轮循环，等待信号
+            }
+            
+            // 如果有临时禁用的断点，在信号处理后恢复
+            if (g_pcb.temp_disabled_bp != nullptr) {
+                bp_restore_temp_disabled(pid);
+            }
+        }
+
+        // 🎯 用户命令输入和处理
         std::cout<< "> " <<std::flush;
         std::getline(std::cin,cmdline);
 
@@ -46,12 +64,16 @@ void command_loop(pid_t pid) {
         std::string inst = args_vec[0];
         std::transform(inst.begin(), inst.end(), inst.begin(), ::tolower);
 
+        // 💡 反向逻辑：默认需要等待信号
+        g_pcb.need_wait_signal = true;
+
         // 查找并执行命令
         auto it = command_table.find(inst);
         if(it != command_table.end()) {
             it->second(pid, args_vec);  // 调用对应的命令处理函数
         } else {
             std::cout << "Unknown command: " << inst << " (try 'help')\n";
+            g_pcb.need_wait_signal = false;  // 未知命令不需要等待信号
         }
     }
 }
@@ -63,21 +85,15 @@ void cmd_continue(pid_t pid, const std::vector<std::string>& args) {
     if (g_pcb.temp_disabled_bp != nullptr) {
         // 单步执行跳过当前断点指令
         step_into(pid);
-        parse_thread_signal(pid);
-        // 然后恢复断点
-        bp_restore_temp_disabled(pid);
+    } else {
+        // 直接继续执行
+        resume_process(pid);
     }
 
-    // go
-    resume_process(pid);
-    parse_thread_signal(pid);
+    // ✅ 默认需要等待信号，无需额外设置
 }
 
-void cmd_parse(pid_t pid, const std::vector<std::string>& args) {
-    // 这是你原来的 else if(inst == "p") 里面的代码，完全不变
-    //解析信号
-    parse_thread_signal(pid);
-}
+// ✅ cmd_parse已移除，parse_thread_signal现在在command_loop中统一调用
 
 void cmd_stop(pid_t pid, const std::vector<std::string>& args) {
     // 这是你原来的 else if(inst == "stop") 里面的代码，完全不变
@@ -103,6 +119,8 @@ void cmd_registers(pid_t pid, const std::vector<std::string>& args) {
             std::cout << "Invalid value: " << args[2] << "\n";
         }
     }
+    // 🚫 不需要等待信号：寄存器读取/设置操作
+    g_pcb.need_wait_signal = false;
 }
 
 void cmd_disasm(pid_t pid, const std::vector<std::string>& args) {
@@ -114,57 +132,70 @@ void cmd_disasm(pid_t pid, const std::vector<std::string>& args) {
         // u - 连续反汇编
         disasm_lines(pid, nullptr, 5, true);
     }
+    // 🚫 不需要等待信号：纯内存读取操作
+    g_pcb.need_wait_signal = false;
 }
 
 void cmd_step_into(pid_t pid, const std::vector<std::string>& args) {
     // 如果有临时禁用的断点，先单步执行原始指令，再恢复断点
     if (g_pcb.temp_disabled_bp != nullptr) {
         step_into(pid);
-        parse_thread_signal(pid);      // 等到单步SIGTRAP
-        bp_restore_temp_disabled(pid); // 恢复断点
+        // ✅ 移除阻塞等待，让command_loop统一处理
+        // parse_thread_signal(pid);      
+        // bp_restore_temp_disabled(pid); // 恢复断点逻辑移到信号处理中
     } else {
         step_into(pid);
-        parse_thread_signal(pid);
+        // ✅ 移除阻塞等待
+        // parse_thread_signal(pid);
     }
 
-    // 重置反汇编状态到当前PC，并显示当前指令
-    disasm_lines(pid, nullptr, 1, false);
+    // ✅ 默认需要等待信号，无需额外设置
 }
 
 void cmd_step_over(pid_t pid, const std::vector<std::string>& args) {
     if (g_pcb.temp_disabled_bp != nullptr) {
         step_into(pid);
-        parse_thread_signal(pid);
-        bp_restore_temp_disabled(pid);
+        // ✅ 移除阻塞等待
+        // parse_thread_signal(pid);
+        // bp_restore_temp_disabled(pid);
     } else {
         step_over(pid);
-        parse_thread_signal(pid);
+        // ✅ 移除阻塞等待
+        // parse_thread_signal(pid);
     }
 
-    disasm_lines(pid, nullptr, 1, false);
+    // ✅ 默认需要等待信号，无需额外设置
 }
 
 void cmd_breakpoint(pid_t pid, const std::vector<std::string>& args) {
     // 这是你原来的 else if (inst == "bp") 里面的代码，完全不变
     uint64_t addr = std::stoull(args[1], nullptr, 16);
     bp_set(pid, (void*)addr);
+    // 🚫 不需要等待信号：断点设置操作
+    g_pcb.need_wait_signal = false;
 }
 
 void cmd_bp_list(pid_t pid, const std::vector<std::string>& args) {
     // 这是你原来的 else if (inst == "bpl") 里面的代码，完全不变
     bp_show();
+    // 🚫 不需要等待信号：断点列表显示操作
+    g_pcb.need_wait_signal = false;
 }
 
 void cmd_bp_clear(pid_t pid, const std::vector<std::string>& args) {
     // 这是你原来的 else if (inst == "bpc") 里面的代码，完全不变
     size_t index = (size_t)std::stoul(args[1], nullptr, 10);
     bp_clear(pid, index);
+    // 🚫 不需要等待信号：断点清除操作
+    g_pcb.need_wait_signal = false;
 }
 
 void cmd_maps(pid_t pid, const std::vector<std::string>& args) {
     // 这是你原来的 else if(inst == "map") 里面的代码，完全不变
     MapControl mapControl(pid);
     mapControl.print_maps();
+    // 🚫 不需要等待信号：读取/proc/pid/maps文件
+    g_pcb.need_wait_signal = false;
 }
 
 void cmd_protect(pid_t pid, const std::vector<std::string>& args) {
@@ -174,6 +205,8 @@ void cmd_protect(pid_t pid, const std::vector<std::string>& args) {
     size_t len = std::stoul(args[2], nullptr,0);
     int prot = std::stoi(args[3], nullptr,0);
     mapControl.change_map_permissions(address,len,prot);
+    // 🚫 不需要等待信号：内存保护属性修改
+    g_pcb.need_wait_signal = false;
 }
 
 void cmd_memory_read(pid_t pid, const std::vector<std::string>& args) {
@@ -189,6 +222,8 @@ void cmd_memory_read(pid_t pid, const std::vector<std::string>& args) {
     if (bytes_read > 0) {
         hexdump(read_memory_buffer, bytes_read, (uintptr_t)address);
     }
+    // 🚫 不需要等待信号：内存读取操作
+    g_pcb.need_wait_signal = false;
 }
 
 void cmd_memory_write(pid_t pid, const std::vector<std::string>& args) {
@@ -203,6 +238,8 @@ void cmd_memory_write(pid_t pid, const std::vector<std::string>& args) {
 
     ssize_t written = write_memory_ptrace(pid, (void *) address, bytes.data(), bytes.size());
     std::cout << "write " << written << " bytes\n";
+    // 🚫 不需要等待信号：内存写入操作
+    g_pcb.need_wait_signal = false;
 }
 
 void cmd_help(pid_t pid, const std::vector<std::string>& args) {
@@ -222,6 +259,8 @@ void cmd_help(pid_t pid, const std::vector<std::string>& args) {
     std::cout << "  mr <addr> <len> - Read memory\n";
     std::cout << "  mw <addr> <bytes...> - Write memory\n";
     std::cout << "  help       - Show this help\n";
+    // 🚫 不需要等待信号：纯文本输出
+    g_pcb.need_wait_signal = false;
 }
 
 void cmd_trace(pid_t pid, const std::vector<std::string> &args) {
@@ -230,5 +269,6 @@ void cmd_trace(pid_t pid, const std::vector<std::string> &args) {
 
     trace_start(start,end);
     step_into(pid);
-    parse_thread_signal(pid);
+    
+    // ✅ 默认需要等待信号，无需额外设置
 }

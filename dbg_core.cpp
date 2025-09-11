@@ -70,7 +70,7 @@ long detach_process(pid_t pid) {
 }
 
 void parse_thread_signal(pid_t pid) {
-    LOG_ENTER("(pid=%d)", pid);
+    //LOG_ENTER("pid=%d", pid);
 
     int status = 0;
     pid_t r = waitpid(pid, &status, 0);  // 阻塞等待该线程的状态变化
@@ -116,6 +116,8 @@ void parse_thread_signal(pid_t pid) {
             LOG("Trace完成：到达结束地址 0x%lx", pc);
             trace_log_step(pid);  // 记录结束地址的指令
             trace_reset();
+            // ✅ 显示当前指令后结束
+            disasm_lines(pid, nullptr, 1, false);
             return;
         }
 
@@ -128,11 +130,16 @@ void parse_thread_signal(pid_t pid) {
             
             // 记录当前指令
             trace_log_step(pid);
+            
+            // ✅ 设置继续标志，让command_loop自动单步
+            g_pcb.trace_need_continue = true;
         }
+        return;
+    }
 
-        //继续单步
-        step_into(pid);
-        parse_thread_signal(pid);
+    // ✅ 非trace模式：显示当前指令（用于单步调试）
+    if (sig == SIGTRAP && info.si_code == TRAP_HWBKPT) {
+        disasm_lines(pid, nullptr, 1, false);
     }
 
 }
@@ -662,8 +669,12 @@ void trace_start(uintptr_t start, uintptr_t end) {
     g_pcb.trace_end = end;
     g_pcb.trace_enabled = true;
 
-
-    if (g_pcb.trace_fp) return;
+    // 如果之前的trace文件还打开着，先关闭它
+    if (g_pcb.trace_fp) {
+        std::fflush(g_pcb.trace_fp);
+        std::fclose(g_pcb.trace_fp);
+        g_pcb.trace_fp = nullptr;
+    }
 
     char filename[128];
     std::snprintf(filename, sizeof(filename),
@@ -701,6 +712,8 @@ void trace_reset() {
     }
     g_pcb.trace_enabled = false;
     g_pcb.trace_ever_into = false;
+    g_pcb.trace_need_continue = false;
+    g_pcb.need_wait_signal = false;
     g_pcb.trace_begin = 0;
     g_pcb.trace_end = 0;
 }
