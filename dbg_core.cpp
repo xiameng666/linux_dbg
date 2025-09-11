@@ -4,7 +4,6 @@
 #include "dbg_core.h"
 
 PCB g_pcb;
-Trace g_trace;
 
 static const std::unordered_map<std::string, size_t> reg_map = {
         // 通用寄存器
@@ -80,35 +79,62 @@ void parse_thread_signal(pid_t pid) {
         return;
     }
 
-    if (WIFSTOPPED(status)) {
-        int sig = WSTOPSIG(status);
-        siginfo_t info{};
-        ptrace(PTRACE_GETSIGINFO, pid, 0, &info);
-        LOG("stopped:si_signo=%d si_code=%d si_pid=%d", info.si_signo, info.si_code, info.si_pid);
-        
-        // 检测断点命中
-        if (sig == SIGTRAP && info.si_code == TRAP_BRKPT) {
-            uint64_t pc = 0;
-            if (get_reg(pid, "pc", &pc) == 0) {
-                LOG("命中断点 PC=0x%lx", pc);
-                g_pcb.last_disasm_addr = 0; // 重置为0，下次u命令会从当前PC开始
-                
-                // 临时禁用当前断点，避免 g 命令时再次触发
-                bp_temp_disable(pid, (void*)pc);
-                print_all_regs(pid);
-                //handle_breakpoint_hit(pid, (void*)pc);
-            }
-        }
-        //检测单步
-        else if (sig == SIGTRAP && info.si_code == TRAP_HWBKPT) {
-            uint64_t pc = 0;
-            if (get_reg(pid, "pc", &pc) == 0) {
-                LOG("单步完成 PC=0x%lx", pc);
-            }
-        }
+    if (!WIFSTOPPED(status)) {
+        return;
     }
 
-    trace_log_step(pid);
+    // 读一次 PC
+    uint64_t pc = 0;
+    (void)get_reg(pid, "pc", &pc);
+
+
+// 非 Trace 模式
+    int sig = WSTOPSIG(status);
+    siginfo_t info{};
+    ptrace(PTRACE_GETSIGINFO, pid, 0, &info);
+    LOGD("stopped:si_signo=%d si_code=%d si_pid=%d", info.si_signo, info.si_code, info.si_pid);
+
+    // 检测断点命中
+    if (sig == SIGTRAP && info.si_code == TRAP_BRKPT) {
+        LOG("命中断点 PC=0x%lx", pc);
+        g_pcb.last_disasm_addr = 0; // 重置为0，下次u命令会从当前PC开始
+
+        // 临时禁用当前断点，避免 g 命令时再次触发
+        bp_temp_disable(pid, (void*)pc);
+        print_all_regs(pid);
+        //handle_breakpoint_hit(pid, (void*)pc);
+    }
+    //检测单步
+    else if (sig == SIGTRAP && info.si_code == TRAP_HWBKPT) {
+        LOG("单步完成 PC=0x%lx", pc);
+    }
+
+// Trace 模式：无限单步，命中区间才写
+    if(g_pcb.trace_enabled){
+        // 计算是否在追踪区间
+        bool in_range = (pc >= g_pcb.trace_begin && pc <= g_pcb.trace_end);
+
+        //第一次进入区间 标记
+        if (!g_pcb.did_into && in_range) {
+            g_pcb.did_into = true;
+        }
+
+        //进入过区间 但是出区间了 不再trace
+        if (g_pcb.did_into && !in_range){
+            trace_stop();
+            return;
+        }
+
+        //在区间内 记录指令
+        if ( in_range) {
+            trace_log_step(pid);
+        }
+
+        //继续单步
+        step_into(pid);
+        parse_thread_signal(pid);
+    }
+
 }
 
 int suspend_process(pid_t pid) {
@@ -632,9 +658,49 @@ uint8_t get_inst_type(pid_t pid, void* address) {
 }
 
 void trace_start(uintptr_t start, uintptr_t end) {
-    g_trace.start(start, end);
+    g_pcb.trace_begin = start;
+    g_pcb.trace_end = end;
+    g_pcb.trace_enabled = true;
+
+    // 特殊：如果传入 -1 作为 begin 表示退出时关闭文件
+    if (g_pcb.trace_fp && start == (uintptr_t)-1) {
+        // flush & close
+        std::fflush(g_pcb.trace_fp);
+        std::fclose(g_pcb.trace_fp);
+        g_pcb.trace_fp = nullptr;
+        return;
+    }
+
+    if (g_pcb.trace_fp) return;
+
+    g_pcb.trace_fp = std::fopen("trace.log", "w");
+    if (!g_pcb.trace_fp) {
+        LOGE("Trace.start fp 打开失败");
+    }
 }
 
 void trace_log_step(pid_t pid) {
-    g_trace.log_step(pid);
+    if (!g_pcb.trace_enabled || !g_pcb.trace_fp) return;
+
+    uint64_t pc = 0;
+    if (get_reg(pid, "pc", &pc) != 0) return;
+
+    uint8_t inst[4] = {0};
+    if (read_memory_vm(pid, (void*)pc, sizeof(inst), inst) != sizeof(inst)) {
+        std::fprintf(g_pcb.trace_fp, "[read fail] PC=0x%lx\n", pc);
+        std::fflush(g_pcb.trace_fp);
+        return;
+    }
+    std::string line = ::disasm(inst, sizeof(inst), pc, false);
+    std::fprintf(g_pcb.trace_fp, "%s\n", line.c_str());
+    std::fflush(g_pcb.trace_fp);
+}
+
+void trace_stop() {
+    if (g_pcb.trace_fp) {
+        std::fflush(g_pcb.trace_fp);
+        std::fclose(g_pcb.trace_fp);
+        g_pcb.trace_fp = nullptr;
+    }
+    g_pcb.trace_enabled = false;
 }

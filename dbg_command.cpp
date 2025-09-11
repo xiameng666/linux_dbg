@@ -229,4 +229,6 @@ void cmd_trace(pid_t pid, const std::vector<std::string> &args) {
     auto end= (uintptr_t)std::stoull(args[2], nullptr,16);
 
     trace_start(start,end);
+    step_into(pid);
+    parse_thread_signal(pid);
 }

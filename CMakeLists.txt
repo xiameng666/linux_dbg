@@ -18,14 +18,13 @@ set(CAPSTONE_ARM64_SUPPORT ON CACHE BOOL "" FORCE)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/third_party/capstone)
 
 # 配置静态库
-#FetchContent_MakeAvailable(capstone)
+#FetchContent_MakeAvailable(capstone)按我
 
 add_executable(${CMAKE_PROJECT_NAME}
         # List C/C++ source files with relative paths to this CMakeLists.txt.
         main.cpp
         dbg_core.cpp
-        dbg_command.cpp
-        trace.cpp)
+        dbg_command.cpp)
 
 if (TARGET capstone-static)
     set(CAPSTONE_LIB capstone-static)

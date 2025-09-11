@@ -25,10 +25,7 @@
 #include <sys/uio.h>
 #include <algorithm>
 #include "capstone/capstone.h"
-#include "trace.h"
-
-class Trace;
-extern  Trace g_trace;
+ 
 
 struct PCB{
     //被调进程pid
@@ -40,7 +37,12 @@ struct PCB{
     // 单步遇到断点 临时禁用的断点地址
     void* temp_disabled_bp = nullptr;
 
-
+    // trace 状态
+    uintptr_t trace_begin = 0;
+    uintptr_t trace_end = 0;
+    bool trace_enabled = false;
+    int into_times = 0; // 进入区间的次数（用于统计/控制）
+    FILE* trace_fp = nullptr;
 };
 extern PCB g_pcb;
 
@@ -98,9 +100,9 @@ std::vector<std::string> split_space(const std::string& s);
 // 十六进制转储函数
 void hexdump(const void* data, size_t size, uintptr_t base_addr = 0);
 
-void trace_start(uintptr_t start, uintptr_t end);
+void trace_start(uintptr_t begin, uintptr_t end);
+void trace_stop();
 void trace_log_step(pid_t pid);
-
 // 全局当前调试进程PID
 extern pid_t g_current_pid;
 

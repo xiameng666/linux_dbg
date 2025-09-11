@@ -3,6 +3,7 @@
 //
 #include "trace.h"
 #include "dbg_core.h"
+#include "trace.h"
 
 void Trace::start(uintptr_t begin, uintptr_t end) {
     begin_ = begin;
@@ -35,13 +36,14 @@ void Trace::log_step(pid_t pid){
     uint64_t pc = 0;
     if (get_reg(pid, "pc", &pc) != 0) return;
 
+    LOG_ENTER("pc: %lu",pc);
+
     uint8_t inst[4] = {0};
     if (read_memory_vm(pid, (void*)pc, sizeof(inst), inst) != sizeof(inst)) {
         std::fprintf(fp_, "[read fail] PC=0x%lx\n", pc);
         std::fflush(fp_);
         return;
     }
-
     std::string line = ::disasm(inst, sizeof(inst), pc, false);
     std::fprintf(fp_, "%s\n",line.c_str());
     std::fflush(fp_);
