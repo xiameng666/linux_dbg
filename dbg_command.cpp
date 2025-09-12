@@ -23,28 +23,21 @@ static std::unordered_map<std::string, CommandHandler> command_table = {
         {"trace", cmd_trace}
 };
 
-// ✅ 重构后的主循环 - 智能信号等待架构
 void command_loop(pid_t pid) {
     MapControl mapControl(pid);
     uint8_t read_memory_buffer[0x1000];
     std::string cmdline;
 
     while(true){
-        // 🔧 反向逻辑：默认等待信号（只有特定命令会禁用）
         if (g_pcb.need_wait_signal) {
             parse_thread_signal(pid);
             
             // ✅ Trace模式的自动单步：由parse_thread_signal中的handle_trace_signal设置
-            if (g_pcb.trace_enabled && g_pcb.trace_need_continue) {
+            if (g_pcb.current_command == CommandType::TRACE && g_pcb.trace_need_continue) {
                 g_pcb.trace_need_continue = false;
                 step_into(pid);
                 continue;  // 继续下一轮循环，等待信号
             }
-            
-            // ❌ 移除自动恢复断点逻辑，改为在具体命令中控制
-            // if (g_pcb.temp_disabled_bp != nullptr) {
-            //     bp_restore_temp_disabled(pid);
-            // }
         }
         
 
@@ -245,6 +238,7 @@ void cmd_help(pid_t pid, const std::vector<std::string>& args) {
     std::cout << "  prot <addr> <len> <prot> - Change protection\n";
     std::cout << "  mr <addr> <len> - Read memory\n";
     std::cout << "  mw <addr> <bytes...> - Write memory\n";
+    std::cout << "  trace <start> <end> - Start trace from start to end address\n";
     std::cout << "  help       - Show this help\n";
     // 🚫 不需要等待信号：纯文本输出
     g_pcb.need_wait_signal = false;
@@ -255,7 +249,30 @@ void cmd_trace(pid_t pid, const std::vector<std::string> &args) {
     auto end= (uintptr_t)std::stoull(args[2], nullptr,16);
 
     trace_start(start,end);
-    step_into(pid);
+    
+    // 获取当前PC
+    uint64_t current_pc = 0;
+    get_reg(pid, "pc", &current_pc);
+    
+    if (current_pc == start) {
+        // 已经在起始地址，直接开始trace
+        LOG("当前已在trace起始地址，开始trace");
+        g_pcb.trace_ever_into = true;
+        step_into(pid);
+    } else {
+        // 在起始地址设置断点，确保程序会停在那里
+        LOG("在trace起始地址 0x%lx 设置断点", start);
+        if (bp_set(pid, (void*)start)) {
+            LOG("断点设置成功，继续执行直到到达trace起始地址");
+            // 设置continue命令，让程序执行到断点
+            g_pcb.current_command = CommandType::CONTINUE;
+            resume_process(pid);
+        } else {
+            LOG("断点设置失败，trace启动失败");
+            trace_reset();
+            g_pcb.need_wait_signal = false;
+        }
+    }
     
     // ✅ 默认需要等待信号，无需额外设置
 }

@@ -32,7 +32,8 @@ enum class CommandType {
     NONE = 0,
     STEP_INTO,
     STEP_OVER,
-    CONTINUE
+    CONTINUE,
+    TRACE
 };
 
 struct PCB{
@@ -48,7 +49,6 @@ struct PCB{
     // trace 状态
     uintptr_t trace_begin = 0;
     uintptr_t trace_end = 0;
-    bool trace_enabled = false;
     bool trace_ever_into= false; //是否进入过trace区间
     bool trace_need_continue = false; //trace是否需要继续单步
     FILE* trace_fp = nullptr;
@@ -84,6 +84,9 @@ void bp_restore_temp_disabled(pid_t pid);  // 恢复临时禁用的断点
 bool bp_is_at_address(void* address);  // 检查指定地址是否有断点
 bool bp_is_temp_for_step_over(void* address);  // 检查是否是步过的临时断点
 void bp_clear_all_temp_for_step_over(pid_t pid);  // 清除所有步过的临时断点
+
+void bp_trace_disable_all(pid_t pid);  // trace开始时禁用所有断点
+void bp_trace_enable_all(pid_t pid);   // trace结束时启用所有断点
 
 struct breakpoint{
     void* address;
