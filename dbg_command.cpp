@@ -189,8 +189,6 @@ void cmd_memory_read(pid_t pid, const std::vector<std::string>& args) {
     //[mr addr len] 读取内存
     void *address= (void*)std::stoull(args[1], nullptr,16);
     size_t len = std::stoul(args[2], nullptr,0);
-    read_memory_vm(pid, address, len, read_memory_buffer);
-
     ssize_t bytes_read = read_memory_vm(pid, address, len, read_memory_buffer);
     if (bytes_read > 0) {
         hexdump(read_memory_buffer, bytes_read, (uintptr_t)address);

@@ -233,10 +233,11 @@ void handle_trace_signal(pid_t pid, uint64_t pc, int sig, siginfo_t info) {
         g_pcb.trace_need_continue = true;
     }
     
-    // 非trace模式：显示当前指令（用于单步调试）
+    /*// 非trace模式：显示当前指令（用于单步调试）
     if (sig == SIGTRAP && info.si_code == TRAP_HWBKPT) {
         disasm_lines(pid, nullptr, 1, false);
     }
+        */
 }
 
 
@@ -335,9 +336,9 @@ bool print_all_regs(pid_t pid) {
 //        }
 //    }
 
-    std::cout << "sp =0x" << std::setw(16) << regs.sp << "  ";
+//    std::cout << "sp =0x" << std::setw(16) << regs.sp << "  ";
     std::cout << "pc =0x" << std::setw(16) << regs.pc << "  ";
-    std::cout << "pstate=0x" << std::setw(8) << regs.pstate << "\n";
+//    std::cout << "pstate=0x" << std::setw(8) << regs.pstate << "\n";
 
     std::cout << std::dec;
     return true;
@@ -468,7 +469,6 @@ void hexdump(const void* data, size_t size, uintptr_t base_addr) {
 ssize_t write_memory_vm(pid_t pid, void *target_address, void *write_data, size_t len) {
     LOG_ENTER("(pid=%d, target_address=%p, write_data=%p, len=%zu)", pid, target_address, write_data, len);
 
-    // 先尝试直接写入
     iovec local{write_data, len};
     iovec remote{target_address, len};
     ssize_t result = process_vm_writev(pid, &local, 1, &remote, 1, 0);
@@ -479,27 +479,6 @@ ssize_t write_memory_vm(pid_t pid, void *target_address, void *write_data, size_
         LOGE("process_vm_writev failed: %s", strerror(errno));
     }
 
-    /*
-    LOG("Direct write failed, trying with permission change...");
-
-    MapControl mapControl(pid);
-
-    // 修改权限
-    bool perm_changed = mapControl.change_map_permissions(target_address, len, PROT_READ | PROT_WRITE);
-    if (!perm_changed) {
-        LOG("Permission change failed, but continuing...");
-    }
-
-    // 再次写入
-    result = process_vm_writev(pid, &local, 1, &remote, 1, 0);
-
-    //恢复修改的权限
-    mapControl.resume_map_permissions();
-
-    if (result == -1) {
-        LOGE("process_vm_writev failed: %s", strerror(errno));
-    }
-*/
     return result;
 }
 
