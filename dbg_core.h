@@ -27,13 +27,21 @@
 #include "capstone/capstone.h"
  
 
-// 命令类型枚举
+// 命令类型枚举（保留用于命令识别）
 enum class CommandType {
     NONE = 0,
     STEP_INTO,
     STEP_OVER,
     CONTINUE,
     TRACE
+};
+
+// 调试器状态枚举（新的状态机设计）
+enum class DebuggerState {
+    IDLE = 0,           // 空闲：等待用户命令
+    CONTINUE,           // 运行：程序正在执行，等待断点
+    STEP,               // 单步：执行一条指令
+    TRACE_ACTIVE        // trace：自动单步直到结束
 };
 
 struct PCB{
@@ -50,7 +58,6 @@ struct PCB{
     uintptr_t trace_begin = 0;
     uintptr_t trace_end = 0;
     bool trace_ever_into= false; //是否进入过trace区间
-    bool trace_need_continue = false; //trace是否需要继续单步
     FILE* trace_fp = nullptr;
     
     // 信号等待控制
@@ -67,7 +74,6 @@ long resume_process(pid_t pid);
 int suspend_process(pid_t pid);
 void parse_thread_signal(pid_t pid);
 void handle_command_signal(pid_t pid, uint64_t pc, int sig, siginfo_t info);  // 统一命令信号处理
-void handle_trace_signal(pid_t pid, uint64_t pc, int sig, siginfo_t info);  // trace模式信号处理
 
 //
 long step_into(pid_t pid);
@@ -91,7 +97,7 @@ void bp_trace_enable_all(pid_t pid);   // trace结束时启用所有断点
 struct breakpoint{
     void* address;
     uint32_t origin_inst;
-    bool is_temp_for_step_over = false;  // 是否是步过操作的临时断点
+    bool is_temp = false;  // 是否是步过操作的临时断点
 };
 static std::vector<breakpoint> g_bp_vec;
 

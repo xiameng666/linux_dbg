@@ -11,7 +11,6 @@ typedef void (*CommandHandler)(pid_t pid, const std::vector<std::string>& args);
 
 void command_loop(pid_t pid);
 void cmd_continue(pid_t pid, const std::vector<std::string>& args);
-// ✅ cmd_parse已移除，parse_thread_signal现在在command_loop中统一调用
 void cmd_stop(pid_t pid, const std::vector<std::string>& args);
 void cmd_registers(pid_t pid, const std::vector<std::string>& args);
 void cmd_disasm(pid_t pid, const std::vector<std::string>& args);
