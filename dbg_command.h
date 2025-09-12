@@ -24,6 +24,7 @@ void cmd_protect(pid_t pid, const std::vector<std::string>& args);
 void cmd_memory_read(pid_t pid, const std::vector<std::string>& args);
 void cmd_memory_write(pid_t pid, const std::vector<std::string>& args);
 void cmd_trace(pid_t pid, const std::vector<std::string>& args);
+void cmd_print_pcb(pid_t pid, const std::vector<std::string>& args);
 void cmd_help(pid_t pid, const std::vector<std::string>& args);
 
 #endif //LINUX_DBG_DBG_COMMAND_H

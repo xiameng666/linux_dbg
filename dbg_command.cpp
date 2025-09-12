@@ -6,7 +6,7 @@
 // 命令映射表
 static std::unordered_map<std::string, CommandHandler> command_table = {
         {"g", cmd_continue},
-        // ✅ 移除"p"命令，parse_thread_signal现在在command_loop中自动调用
+        {"p", cmd_print_pcb},  // 打印PCB状态
         {"stop", cmd_stop},
         {"r", cmd_registers},
         {"u", cmd_disasm},
@@ -30,8 +30,8 @@ void command_loop(pid_t pid) {
 
     while(true){
         if (g_pcb.need_wait_signal) {
-            parse_thread_signal(pid);
-            
+            // 使用新的状态机信号处理
+            parse_signal_new(pid);
         }
 
         while(true) {
@@ -66,8 +66,9 @@ void command_loop(pid_t pid) {
 }
 
 void cmd_continue(pid_t pid, const std::vector<std::string>& args) {
-    // 设置命令类型，让parse_thread_signal统一处理
-    g_pcb.current_command = CommandType::CONTINUE;
+    // 设置新的调试器状态
+    g_pcb.debugger_state = DebuggerState::CONTINUE;
+    g_pcb.current_command = CommandType::CONTINUE; // 保留兼容
     
     // 检查是否需要跨越断点
     if (g_pcb.temp_disabled_bp != nullptr) {
@@ -123,13 +124,16 @@ void cmd_disasm(pid_t pid, const std::vector<std::string>& args) {
 }
 
 void cmd_step_into(pid_t pid, const std::vector<std::string>& args) {
-    g_pcb.current_command = CommandType::STEP_INTO;
+    // 设置新的调试器状态
+    g_pcb.debugger_state = DebuggerState::STEP;
+    g_pcb.current_command = CommandType::STEP_INTO; // 保留兼容
     step_into(pid);
 }
 
 void cmd_step_over(pid_t pid, const std::vector<std::string>& args) {
-    // 🎯 设置命令类型，让parse_thread_signal统一处理
-    g_pcb.current_command = CommandType::STEP_OVER;
+    // 设置新的调试器状态
+    g_pcb.debugger_state = DebuggerState::STEP;
+    g_pcb.current_command = CommandType::STEP_OVER; // 保留兼容
     step_over(pid);
     
 }
@@ -250,11 +254,74 @@ void cmd_trace(pid_t pid, const std::vector<std::string> &args) {
     LOG("在trace起始地址 0x%lx 设置断点", start);
     if (bp_set(pid, (void*)start)) {
         LOG("断点设置成功，继续执行直到到达trace起始地址");
-        g_pcb.current_command = CommandType::CONTINUE;
+        // 设置状态为CONTINUE，等待起始断点
+        g_pcb.debugger_state = DebuggerState::CONTINUE;
+        g_pcb.current_command = CommandType::CONTINUE; // 保留兼容
         resume_process(pid);
     } else {
         LOG("断点设置失败，trace启动失败");
         trace_reset();
         g_pcb.need_wait_signal = false;
     }
+}
+
+void cmd_print_pcb(pid_t pid, const std::vector<std::string>& args) {
+    printf("=== PCB (Process Control Block) 状态 ===\n");
+    
+    // 基本进程信息
+    printf("进程信息:\n");
+    printf("  PID: %d\n", g_pcb.pid);
+    printf("  需要等待信号: %s\n", g_pcb.need_wait_signal ? "是" : "否");
+    
+    // 调试器状态信息  
+    printf("\n调试器状态:\n");
+    printf("  当前状态: ");
+    switch (g_pcb.debugger_state) {
+        case DebuggerState::IDLE:        printf("IDLE (空闲)\n"); break;
+        case DebuggerState::CONTINUE:    printf("CONTINUE (运行)\n"); break;
+        case DebuggerState::STEP:        printf("STEP (单步)\n"); break;
+        case DebuggerState::TRACE_ACTIVE: printf("TRACE_ACTIVE (trace中)\n"); break;
+        default: printf("未知(%d)\n", (int)g_pcb.debugger_state); break;
+    }
+    
+    printf("  命令类型(兼容): ");
+    switch (g_pcb.current_command) {
+        case CommandType::NONE:      printf("NONE\n"); break;
+        case CommandType::STEP_INTO: printf("STEP_INTO\n"); break;
+        case CommandType::STEP_OVER: printf("STEP_OVER\n"); break;
+        case CommandType::CONTINUE:  printf("CONTINUE\n"); break;
+        case CommandType::TRACE:     printf("TRACE\n"); break;
+        default: printf("未知(%d)\n", (int)g_pcb.current_command); break;
+    }
+    
+    // 反汇编状态
+    printf("\n反汇编状态:\n");
+    printf("  上次反汇编地址: 0x%lx\n", g_pcb.last_disasm_addr);
+    
+    // 断点状态
+    printf("\n断点状态:\n");
+    printf("  临时禁用断点: %s", g_pcb.temp_disabled_bp ? "有" : "无");
+    if (g_pcb.temp_disabled_bp) {
+        printf(" (地址: 0x%lx)", (uintptr_t)g_pcb.temp_disabled_bp);
+    }
+    printf("\n");
+    
+    // Trace状态
+    printf("\nTrace状态:\n");
+    printf("  起始地址: 0x%lx\n", g_pcb.trace_begin);
+    printf("  结束地址: 0x%lx\n", g_pcb.trace_end);
+    printf("  已进入过trace: %s\n", g_pcb.trace_ever_into ? "是" : "否");
+    printf("  trace文件: %s\n", g_pcb.trace_fp ? "已打开" : "未打开");
+    
+    // 当前PC值
+    uint64_t current_pc = 0;
+    if (get_reg(pid, "pc", &current_pc) == 0) {
+        printf("\n当前执行状态:\n");
+        printf("  PC: 0x%lx\n", current_pc);
+    }
+    
+    printf("=====================================\n");
+    
+    // 不需要等待信号
+    g_pcb.need_wait_signal = false;
 }

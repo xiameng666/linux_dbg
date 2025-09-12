@@ -63,8 +63,11 @@ struct PCB{
     // 信号等待控制
     bool need_wait_signal = false; //是否需要等待进程信号
     
-    // 当前执行的命令类型
+    // 当前执行的命令类型（逐步废弃）
     CommandType current_command = CommandType::NONE;
+    
+    // 新的调试器状态机
+    DebuggerState debugger_state = DebuggerState::IDLE;
 };
 extern PCB g_pcb;
 
@@ -72,8 +75,16 @@ long attach_process(pid_t pid);
 long detach_process(pid_t pid);
 long resume_process(pid_t pid);
 int suspend_process(pid_t pid);
+// 旧的信号处理（逐步废弃）
 void parse_thread_signal(pid_t pid);
 void handle_command_signal(pid_t pid, uint64_t pc, int sig, siginfo_t info);  // 统一命令信号处理
+
+// 新的状态机信号处理
+void parse_signal_new(pid_t pid);                                    // 新的统一信号入口
+void handle_idle_signal(pid_t pid, uint64_t pc, int sig, siginfo_t info);
+void handle_continue_signal(pid_t pid, uint64_t pc, int sig, siginfo_t info);
+void handle_step_signal(pid_t pid, uint64_t pc, int sig, siginfo_t info);
+void handle_trace_signal_new(pid_t pid, uint64_t pc, int sig, siginfo_t info);
 
 //
 long step_into(pid_t pid);

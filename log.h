@@ -23,7 +23,7 @@
 #define __FUNC_NAME__ __func__
 #endif
 
-#define LOG_ENTER(...) // do { printf("----> %s", __FUNC_NAME__); printf(__VA_ARGS__); printf("\n");} while(0) //
+#define LOG_ENTER(...)  do { printf("----> %s", __FUNC_NAME__); printf(__VA_ARGS__); printf("\n");} while(0) //
 
 
 /*
