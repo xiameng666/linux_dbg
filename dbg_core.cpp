@@ -87,62 +87,158 @@ void parse_thread_signal(pid_t pid) {
     uint64_t pc = 0;
     (void)get_reg(pid, "pc", &pc);
 
-
-// 非 Trace 模式
     int sig = WSTOPSIG(status);
     siginfo_t info{};
     ptrace(PTRACE_GETSIGINFO, pid, 0, &info);
     LOGD("stopped:si_signo=%d si_code=%d si_pid=%d", info.si_signo, info.si_code, info.si_pid);
 
-    // 检测断点命中
-    if (sig == SIGTRAP && info.si_code == TRAP_BRKPT) {
-        LOG("命中断点 PC=0x%lx", pc);
-        g_pcb.last_disasm_addr = 0; // 重置为0，下次u命令会从当前PC开始
-
-        // 临时禁用当前断点，避免 g 命令时再次触发
-        bp_temp_disable(pid, (void*)pc);
-        print_all_regs(pid);
-        //handle_breakpoint_hit(pid, (void*)pc);
+    // 统一的命令处理逻辑
+    if (g_pcb.current_command != CommandType::NONE) {
+        handle_command_signal(pid, pc, sig, info);
+        return;
     }
-    //检测单步
-    else if (sig == SIGTRAP && info.si_code == TRAP_HWBKPT) {
-        LOG("单步完成 PC=0x%lx", pc);
+    
+    // 🎯 Trace模式处理：独立于命令系统
+    if (g_pcb.trace_enabled) {
+        handle_trace_signal(pid, pc, sig, info);
     }
+}
 
-// Trace 模式：精确匹配起始和结束地址
-    if(g_pcb.trace_enabled){
-        // 检查是否到达结束地址
-        if (pc == g_pcb.trace_end) {
-            LOG("Trace完成：到达结束地址 0x%lx", pc);
-            trace_log_step(pid);  // 记录结束地址的指令
-            trace_reset();
-            // ✅ 显示当前指令后结束
-            disasm_lines(pid, nullptr, 1, false);
-            return;
-        }
-
-        // 开始trace：第一次命中起始地址或已经开始了trace
-        if (pc == g_pcb.trace_begin || g_pcb.trace_ever_into) {
-            if (!g_pcb.trace_ever_into) {
-                LOG("Trace开始：命中起始地址 0x%lx", pc);
-                g_pcb.trace_ever_into = true;
+void handle_command_signal(pid_t pid, uint64_t pc, int sig, siginfo_t info) {
+    CommandType cmd = g_pcb.current_command;
+    
+    switch (cmd) {
+        case CommandType::STEP_INTO:
+        case CommandType::STEP_OVER:
+        {
+            if (sig == SIGTRAP && info.si_code == TRAP_BRKPT) {
+                LOG("命中断点 PC=0x%lx", pc);
+                g_pcb.last_disasm_addr = 0; // 重置反汇编地址，让下次u命令从当前PC开始
+                
+                // 检查是否是步过的临时断点
+                if (cmd == CommandType::STEP_OVER && bp_is_temp_for_step_over((void*)pc)) {
+                    // 步过操作完成：清除临时断点，显示结果
+                    LOG("步过操作完成 PC=0x%lx", pc);
+                    
+                    for (size_t i = 0; i < g_bp_vec.size(); i++) {
+                        if (g_bp_vec[i].address == (void*)pc && g_bp_vec[i].is_temp_for_step_over) {
+                            bp_clear(pid, i);
+                            break;
+                        }
+                    }
+                    
+                    // 显示当前指令
+                    disasm_lines(pid, nullptr, 1, false);
+                    
+                    // 清除命令状态
+                    g_pcb.current_command = CommandType::NONE;
+                } else {
+                    // 普通断点：临时禁用断点，执行单步
+                    bp_temp_disable(pid, (void*)pc);
+                    print_all_regs(pid);
+                    
+                    // 如果是步过命令遇到普通断点，清除之前的临时断点
+                    if (cmd == CommandType::STEP_OVER) {
+                        bp_clear_all_temp_for_step_over(pid);
+                    }
+                    
+                    // 执行单步
+                    if (cmd == CommandType::STEP_INTO) {
+                        step_into(pid);
+                    } else {
+                        step_over(pid);
+                    }
+                    // 保持命令状态，等待单步完成信号
+                }
+                
+            } else if (sig == SIGTRAP && info.si_code == TRAP_HWBKPT) {
+                // 单步完成：恢复断点，显示结果，清除命令状态
+                LOG("单步完成 PC=0x%lx", pc);
+                
+                if (g_pcb.temp_disabled_bp != nullptr) {
+                    bp_restore_temp_disabled(pid);
+                }
+                
+                // 清除任何遗留的步过临时断点
+                if (cmd == CommandType::STEP_OVER) {
+                    bp_clear_all_temp_for_step_over(pid);
+                }
+                
+                // 显示当前指令
+                disasm_lines(pid, nullptr, 1, false);
+                
+                // 清除命令状态
+                g_pcb.current_command = CommandType::NONE;
             }
-            
-            // 记录当前指令
-            trace_log_step(pid);
-            
-            // ✅ 设置继续标志，让command_loop自动单步
-            g_pcb.trace_need_continue = true;
         }
+            break;
+            
+        case CommandType::CONTINUE:
+        {
+            if (sig == SIGTRAP && info.si_code == TRAP_BRKPT) {
+                // 命中断点：临时禁用断点，单步一次跳过
+                LOG("命中断点 PC=0x%lx", pc);
+                g_pcb.last_disasm_addr = 0; // 重置反汇编地址，让下次u命令从当前PC开始
+                bp_temp_disable(pid, (void*)pc);
+                print_all_regs(pid);
+                
+                // 单步跳过断点
+                step_into(pid);
+                
+            } else if (sig == SIGTRAP && info.si_code == TRAP_HWBKPT) {
+                // 单步完成：恢复断点，继续执行
+                LOG("跳过断点完成，继续执行 PC=0x%lx", pc);
+                
+                if (g_pcb.temp_disabled_bp != nullptr) {
+                    bp_restore_temp_disabled(pid);
+                }
+                
+                // 继续执行
+                resume_process(pid);
+                // 保持命令状态，继续等待下一个断点或停止信号
+            }
+        }
+            break;
+            
+        default:
+            // 不应该到达这里
+            g_pcb.current_command = CommandType::NONE;
+            break;
+    }
+}
+
+// 🎯 Trace模式信号处理
+void handle_trace_signal(pid_t pid, uint64_t pc, int sig, siginfo_t info) {
+    // 检查是否到达结束地址
+    if (pc == g_pcb.trace_end) {
+        LOG("Trace完成：到达结束地址 0x%lx", pc);
+        trace_log_step(pid);  // 记录结束地址的指令
+        trace_reset();
+        // 显示当前指令后结束
+        disasm_lines(pid, nullptr, 1, false);
         return;
     }
 
-    // ✅ 非trace模式：显示当前指令（用于单步调试）
+    // 开始trace：第一次命中起始地址或已经开始了trace
+    if (pc == g_pcb.trace_begin || g_pcb.trace_ever_into) {
+        if (!g_pcb.trace_ever_into) {
+            LOG("Trace开始：命中起始地址 0x%lx", pc);
+            g_pcb.trace_ever_into = true;
+        }
+        
+        // 记录当前指令
+        trace_log_step(pid);
+        
+        // 设置继续标志，让command_loop自动单步
+        g_pcb.trace_need_continue = true;
+    }
+    
+    // 非trace模式：显示当前指令（用于单步调试）
     if (sig == SIGTRAP && info.si_code == TRAP_HWBKPT) {
         disasm_lines(pid, nullptr, 1, false);
     }
-
 }
+
 
 int suspend_process(pid_t pid) {
     LOG_ENTER("(pid=%d)", pid);
@@ -230,14 +326,14 @@ bool print_all_regs(pid_t pid) {
 
     std::cout << std::hex << std::setfill('0');
 
-    for (int i = 0; i < 31; i++) {
-        std::cout << "x" << std::setw(2) << i << "=0x" << std::setw(16) << regs.regs[i];
-        if ((i + 1) % 4 == 0) {
-            std::cout << "\n";
-        } else {
-            std::cout << "  ";
-        }
-    }
+//    for (int i = 0; i < 31; i++) {
+//        std::cout << "x" << std::setw(2) << i << "=0x" << std::setw(16) << regs.regs[i];
+//        if ((i + 1) % 4 == 0) {
+//            std::cout << "\n";
+//        } else {
+//            std::cout << "  ";
+//        }
+//    }
 
     std::cout << "sp =0x" << std::setw(16) << regs.sp << "  ";
     std::cout << "pc =0x" << std::setw(16) << regs.pc << "  ";
@@ -300,14 +396,14 @@ long step_over(pid_t pid){
         return -1;
     }
 
-    uint8_t inst_type = get_inst_type(pid, &pc_value);
+    uint8_t inst_type = get_inst_type(pid, (void*)pc_value);
     
     if (inst_type == CS_GRP_CALL) {
         // BL/BLR ：在返回地址设置临时断点
         uintptr_t return_addr = pc_value + 4;
         LOGD("step_over 检测到 CS_GRP_CALL 设置临时断点: 0x%lx", return_addr);
         
-        if (!bp_set(pid, (void*)return_addr)) {
+        if (!bp_set_temp_for_step_over(pid, (void*)return_addr)) {
             LOGE("step_over 临时断点设置失败");
             return -1;
         }
@@ -523,6 +619,36 @@ bool bp_set(pid_t pid, void *address) {
     return false;
 }
 
+// 设置步过操作的临时断点
+bool bp_set_temp_for_step_over(pid_t pid, void *address) {
+    LOG_ENTER("(pid=%d, address=%p)", pid, address);
+    uint32_t BRK = 0xD4200000;
+
+    do{
+        //已存在 跳过
+        for(auto& bp:g_bp_vec){
+            if(bp.address == address) {
+                // 如果已存在，标记为临时断点
+                bp.is_temp_for_step_over = true;
+                return true;
+            }
+        }
+
+        uint32_t orig  = 0;
+        if (read_memory_vm(pid, address, 4, &orig) != 4) break;
+        if (write_memory_ptrace(pid, address, &BRK, 4) != 4)  break;
+
+        breakpoint newbp{address, orig, true};  // 标记为临时断点
+        g_bp_vec.emplace_back(newbp);
+        // 临时断点不打印给用户看 print_singel_bp(g_bp_vec.size()-1);
+        return true;
+
+    }while(0);
+
+    LOGE("bp_set_temp_for_step_over 失败");
+    return false;
+}
+
 bool bp_clear(pid_t pid, size_t index) {
     LOG_ENTER("(pid=%d, index=%zu)", pid, index);
 
@@ -550,7 +676,10 @@ void bp_show() {
     LOG_ENTER("");
 
     for (size_t i = 0; i < g_bp_vec.size(); ++i) {
-        print_singel_bp(i);
+        // 跳过步过操作的临时断点
+        if (!g_bp_vec[i].is_temp_for_step_over) {
+            print_singel_bp(i);
+        }
     }
 }
 
@@ -597,6 +726,36 @@ void bp_restore_temp_disabled(pid_t pid) {
     }
 }
 
+// 检查指定地址是否有断点
+bool bp_is_at_address(void* address) {
+    for (const auto& bp : g_bp_vec) {
+        if (bp.address == address) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// 检查是否是步过的临时断点
+bool bp_is_temp_for_step_over(void* address) {
+    for (const auto& bp : g_bp_vec) {
+        if (bp.address == address && bp.is_temp_for_step_over) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// 清除所有步过的临时断点
+void bp_clear_all_temp_for_step_over(pid_t pid) {
+    for (int i = g_bp_vec.size() - 1; i >= 0; i--) {
+        if (g_bp_vec[i].is_temp_for_step_over) {
+            LOGD("清除步过临时断点: 0x%lx", (unsigned long)g_bp_vec[i].address);
+            bp_clear(pid, i);
+        }
+    }
+}
+
 std::string disasm(const uint8_t *code , size_t code_size, uint64_t address, bool isbp){
     csh  handle;
     cs_err error = cs_open(CS_ARCH_AARCH64,CS_MODE_ARM,&handle);
@@ -636,10 +795,25 @@ uint8_t get_inst_type(pid_t pid, void* address) {
         }
     }
 
-    // 读取指令
+    // 如果PC在断点位置，使用保存的原始指令
     uint32_t instruction;
-    if (read_memory_vm(pid, (void*)pc, sizeof(instruction), &instruction) != sizeof(instruction)) {
-        return 0;
+    bool found_original = false;
+    
+    for (const auto& bp : g_bp_vec) {
+        if (bp.address == (void*)pc) {
+            instruction = bp.origin_inst;
+            LOGD("get_inst_type: 在断点位置0x%lx使用原始指令=0x%x", pc, instruction);
+            found_original = true;
+            break;
+        }
+    }
+    
+    // 如果不在断点位置，正常读取内存
+    if (!found_original) {
+        if (read_memory_vm(pid, (void*)pc, sizeof(instruction), &instruction) != sizeof(instruction)) {
+            LOGE("get_inst_type: read_memory_vm 失败！");
+            return 0;
+        }
     }
 
     csh handle;
@@ -681,7 +855,8 @@ void trace_start(uintptr_t start, uintptr_t end) {
                   "trace_%016lx_%016lx.log",
                   (unsigned long)start, (unsigned long)end);
 
-    g_pcb.trace_fp = std::fopen(filename, "w");
+//    g_pcb.trace_fp = std::fopen(filename, "w");
+    g_pcb.trace_fp = std::fopen("trace.log", "w");
     if (!g_pcb.trace_fp) {
         LOGE("Trace.start fp 打开失败");
     }

@@ -34,25 +34,26 @@ void command_loop(pid_t pid) {
         if (g_pcb.need_wait_signal) {
             parse_thread_signal(pid);
             
-            // 检查trace是否需要继续（trace模式下的自动单步）
+            // ✅ Trace模式的自动单步：由parse_thread_signal中的handle_trace_signal设置
             if (g_pcb.trace_enabled && g_pcb.trace_need_continue) {
                 g_pcb.trace_need_continue = false;
                 step_into(pid);
                 continue;  // 继续下一轮循环，等待信号
             }
             
-            // 如果有临时禁用的断点，在信号处理后恢复
-            if (g_pcb.temp_disabled_bp != nullptr) {
-                bp_restore_temp_disabled(pid);
-            }
+            // ❌ 移除自动恢复断点逻辑，改为在具体命令中控制
+            // if (g_pcb.temp_disabled_bp != nullptr) {
+            //     bp_restore_temp_disabled(pid);
+            // }
         }
+        
 
-        // 🎯 用户命令输入和处理
-        std::cout<< "> " <<std::flush;
-        std::getline(std::cin,cmdline);
-
-        //分割输入的命令
-        if(cmdline.empty()) continue;
+        while(true) {
+            std::cout<< "> " <<std::flush;
+            std::getline(std::cin,cmdline);
+            
+            if(!cmdline.empty()) break; 
+        }
         auto args_vec = split_space(cmdline);
 
 //        //观测分割情况
@@ -64,33 +65,24 @@ void command_loop(pid_t pid) {
         std::string inst = args_vec[0];
         std::transform(inst.begin(), inst.end(), inst.begin(), ::tolower);
 
-        // 💡 反向逻辑：默认需要等待信号
+        //默认需要等待信号
         g_pcb.need_wait_signal = true;
 
         // 查找并执行命令
         auto it = command_table.find(inst);
         if(it != command_table.end()) {
-            it->second(pid, args_vec);  // 调用对应的命令处理函数
+            it->second(pid, args_vec);
         } else {
             std::cout << "Unknown command: " << inst << " (try 'help')\n";
-            g_pcb.need_wait_signal = false;  // 未知命令不需要等待信号
+            g_pcb.need_wait_signal = false;
         }
     }
 }
 
 void cmd_continue(pid_t pid, const std::vector<std::string>& args) {
-    //parse_sign中收到TRAP_BRKPT->临时禁用断点
-    //cmd_continue中先单步一次执行原始指令 → 收到单步 SIGTRAP → 再把断点恢复 → go。
-
-    if (g_pcb.temp_disabled_bp != nullptr) {
-        // 单步执行跳过当前断点指令
-        step_into(pid);
-    } else {
-        // 直接继续执行
-        resume_process(pid);
-    }
-
-    // ✅ 默认需要等待信号，无需额外设置
+    // 🎯 设置命令类型，让parse_thread_signal统一处理
+    g_pcb.current_command = CommandType::CONTINUE;
+    resume_process(pid);
 }
 
 // ✅ cmd_parse已移除，parse_thread_signal现在在command_loop中统一调用
@@ -137,34 +129,15 @@ void cmd_disasm(pid_t pid, const std::vector<std::string>& args) {
 }
 
 void cmd_step_into(pid_t pid, const std::vector<std::string>& args) {
-    // 如果有临时禁用的断点，先单步执行原始指令，再恢复断点
-    if (g_pcb.temp_disabled_bp != nullptr) {
-        step_into(pid);
-        // ✅ 移除阻塞等待，让command_loop统一处理
-        // parse_thread_signal(pid);      
-        // bp_restore_temp_disabled(pid); // 恢复断点逻辑移到信号处理中
-    } else {
-        step_into(pid);
-        // ✅ 移除阻塞等待
-        // parse_thread_signal(pid);
-    }
-
-    // ✅ 默认需要等待信号，无需额外设置
+    g_pcb.current_command = CommandType::STEP_INTO;
+    step_into(pid);
 }
 
 void cmd_step_over(pid_t pid, const std::vector<std::string>& args) {
-    if (g_pcb.temp_disabled_bp != nullptr) {
-        step_into(pid);
-        // ✅ 移除阻塞等待
-        // parse_thread_signal(pid);
-        // bp_restore_temp_disabled(pid);
-    } else {
-        step_over(pid);
-        // ✅ 移除阻塞等待
-        // parse_thread_signal(pid);
-    }
-
-    // ✅ 默认需要等待信号，无需额外设置
+    // 🎯 设置命令类型，让parse_thread_signal统一处理
+    g_pcb.current_command = CommandType::STEP_OVER;
+    step_over(pid);
+    
 }
 
 void cmd_breakpoint(pid_t pid, const std::vector<std::string>& args) {

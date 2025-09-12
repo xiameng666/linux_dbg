@@ -13,7 +13,7 @@
 #endif
 
 #define LOG(...) do { printf(__VA_ARGS__); printf("\n"); } while(0)
-#define LOGD(...)  do { printf("----> %s", __FUNC_NAME__); } while(0) //((void)0)//
+#define LOGD(...)  do { printf("----> %s", __FUNC_NAME__);printf(__VA_ARGS__); printf("\n"); } while(0) //((void)0)//
 #define LOGE(...)  do { printf(__VA_ARGS__); printf("\n"); } while(0)
 
 // function entry logging

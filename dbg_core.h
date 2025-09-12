@@ -27,6 +27,14 @@
 #include "capstone/capstone.h"
  
 
+// 命令类型枚举
+enum class CommandType {
+    NONE = 0,
+    STEP_INTO,
+    STEP_OVER,
+    CONTINUE
+};
+
 struct PCB{
     //被调进程pid
     pid_t pid = -1;
@@ -45,8 +53,11 @@ struct PCB{
     bool trace_need_continue = false; //trace是否需要继续单步
     FILE* trace_fp = nullptr;
     
-    // 🔧 信号等待控制
+    // 信号等待控制
     bool need_wait_signal = false; //是否需要等待进程信号
+    
+    // 当前执行的命令类型
+    CommandType current_command = CommandType::NONE;
 };
 extern PCB g_pcb;
 
@@ -55,6 +66,8 @@ long detach_process(pid_t pid);
 long resume_process(pid_t pid);
 int suspend_process(pid_t pid);
 void parse_thread_signal(pid_t pid);
+void handle_command_signal(pid_t pid, uint64_t pc, int sig, siginfo_t info);  // 统一命令信号处理
+void handle_trace_signal(pid_t pid, uint64_t pc, int sig, siginfo_t info);  // trace模式信号处理
 
 //
 long step_into(pid_t pid);
@@ -62,15 +75,20 @@ long step_over(pid_t pid);
 
 //
 bool bp_set(pid_t pid,void* address);
+bool bp_set_temp_for_step_over(pid_t pid, void* address);  // 设置步过操作的临时断点
 bool bp_clear(pid_t pid, size_t index);
 void bp_show();
 void print_singel_bp(size_t index);
 void bp_temp_disable(pid_t pid, void* address);  // 临时禁用断点
 void bp_restore_temp_disabled(pid_t pid);  // 恢复临时禁用的断点
+bool bp_is_at_address(void* address);  // 检查指定地址是否有断点
+bool bp_is_temp_for_step_over(void* address);  // 检查是否是步过的临时断点
+void bp_clear_all_temp_for_step_over(pid_t pid);  // 清除所有步过的临时断点
 
 struct breakpoint{
     void* address;
     uint32_t origin_inst;
+    bool is_temp_for_step_over = false;  // 是否是步过操作的临时断点
 };
 static std::vector<breakpoint> g_bp_vec;
 
