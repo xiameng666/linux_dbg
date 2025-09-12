@@ -29,11 +29,12 @@ void command_loop(pid_t pid) {
     std::string cmdline;
 
     while(true){
-        if (g_pcb.need_wait_signal) {
-            // 使用新的状态机信号处理
+        // 持续等待信号直到不需要等待
+        while (g_pcb.need_wait_signal) {
             parse_signal_new(pid);
         }
 
+        // 只有不需要等待信号时才进入命令输入
         while(true) {
             std::cout<< "> " <<std::flush;
             std::getline(std::cin,cmdline);
@@ -222,7 +223,7 @@ void cmd_memory_write(pid_t pid, const std::vector<std::string>& args) {
 void cmd_help(pid_t pid, const std::vector<std::string>& args) {
     std::cout << "Available commands:\n";
     std::cout << "  g          - Continue execution\n";
-    std::cout << "  p          - Parse thread signal\n";
+    std::cout << "  p          - Print PCB (Process Control Block) status\n";
     std::cout << "  stop       - Suspend process\n";
     std::cout << "  r [reg] [val] - Show/set registers\n";
     std::cout << "  u [addr]   - Disassemble\n";

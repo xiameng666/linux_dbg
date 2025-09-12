@@ -278,7 +278,7 @@ void parse_signal_new(pid_t pid) {
     siginfo_t info{};
     ptrace(PTRACE_GETSIGINFO, pid, 0, &info);
     
-    LOG("状态=%d, PC=0x%lx, sig=%d, code=%d", 
+    LOGD("状态=%d, PC=0x%lx, sig=%d, code=%d",
         (int)g_pcb.debugger_state, pc, sig, info.si_code);
     
     // 根据当前状态分发处理
@@ -298,6 +298,7 @@ void parse_signal_new(pid_t pid) {
         default:
             LOG("未知调试器状态: %d", (int)g_pcb.debugger_state);
             g_pcb.debugger_state = DebuggerState::IDLE;
+            g_pcb.need_wait_signal = false;
             break;
     }
 }
@@ -339,16 +340,19 @@ void handle_continue_signal(pid_t pid, uint64_t pc, int sig, siginfo_t info) {
             
             // 切换到trace状态并开始
             g_pcb.debugger_state = DebuggerState::TRACE_ACTIVE;
+            g_pcb.current_command = CommandType::TRACE;  // 设置命令类型，让trace_log_step正常工作
             step_into(pid);
         } else {
             // 普通断点：显示信息，回到空闲状态
             print_all_regs(pid);
             disasm_lines(pid, nullptr, 1, false);
             g_pcb.debugger_state = DebuggerState::IDLE;
+            g_pcb.need_wait_signal = false;
         }
     } else {
         LOG("CONTINUE状态收到意外信号: sig=%d, code=%d", sig, info.si_code);
         g_pcb.debugger_state = DebuggerState::IDLE;
+        g_pcb.need_wait_signal = false;
     }
 }
 
@@ -366,6 +370,7 @@ void handle_step_signal(pid_t pid, uint64_t pc, int sig, siginfo_t info) {
         // 显示结果，回到空闲状态
         disasm_lines(pid, nullptr, 1, false);
         g_pcb.debugger_state = DebuggerState::IDLE;
+        g_pcb.need_wait_signal = false;
     } else if (sig == SIGTRAP && info.si_code == TRAP_BRKPT) {
         LOG("单步时命中断点 PC=0x%lx", pc);
         // 处理单步过程中遇到的断点
@@ -373,9 +378,11 @@ void handle_step_signal(pid_t pid, uint64_t pc, int sig, siginfo_t info) {
         print_all_regs(pid);
         disasm_lines(pid, nullptr, 1, false);
         g_pcb.debugger_state = DebuggerState::IDLE;
+        g_pcb.need_wait_signal = false;
     } else {
         LOG("STEP状态收到意外信号: sig=%d, code=%d", sig, info.si_code);
         g_pcb.debugger_state = DebuggerState::IDLE;
+        g_pcb.need_wait_signal = false;
     }
 }
 
@@ -438,7 +445,7 @@ long resume_process(pid_t pid) {
 }
 
 long get_reg(pid_t pid, const char* reg_name, uint64_t* value) {
-    LOG_ENTER("(pid=%d, reg_name=%s, value=%p)", pid, reg_name, value);
+    //LOG_ENTER("(pid=%d, reg_name=%s, value=%p)", pid, reg_name, value);
 
     user_regs_struct regs{};
     iovec iov{&regs, sizeof(user_regs_struct)};
@@ -600,7 +607,7 @@ long step_over(pid_t pid){
 }
 
 ssize_t read_memory_vm(pid_t pid, void *target_address, size_t len, void *save_buffer) {
-    LOG_ENTER("(pid=%d, target_address=%p, len=%zu, save_buffer=%p)", pid, target_address, len, save_buffer);
+    //LOG_ENTER("(pid=%d, target_address=%p, len=%zu, save_buffer=%p)", pid, target_address, len, save_buffer);
 
     iovec local{save_buffer,len};
     iovec remote{target_address,len};
@@ -664,7 +671,7 @@ ssize_t write_memory_vm(pid_t pid, void *target_address, void *write_data, size_
 }
 
 ssize_t write_memory_ptrace(pid_t pid, void *target_address, void *write_data, size_t len) {
-    LOG_ENTER("(pid=%d, target_address=%p, write_data=%p, len=%zu)", pid, target_address, write_data, len);
+    //LOG_ENTER("(pid=%d, target_address=%p, write_data=%p, len=%zu)", pid, target_address, write_data, len);
 
     uint8_t *data = (uint8_t*)write_data;
     uintptr_t addr = (uintptr_t)target_address;
@@ -702,7 +709,7 @@ ssize_t write_memory_ptrace(pid_t pid, void *target_address, void *write_data, s
 }
 
 void disasm_lines(pid_t pid, void* target_addr, size_t line, bool is_continue) {
-    LOG_ENTER("(pid=%d, target_addr=%p, line=%zu, is_continue=%d)", pid, target_addr, line, is_continue);
+    //LOG_ENTER("(pid=%d, target_addr=%p, line=%zu, is_continue=%d)", pid, target_addr, line, is_continue);
 
     uint64_t pc_value = 0;
 
@@ -1040,7 +1047,7 @@ void trace_log_step(pid_t pid) {
     std::fflush(g_pcb.trace_fp);
     
 
-    LOG("[trace] %s", line.c_str());//LOG就是printf 别改了
+    LOG("[trace] %s", line.c_str());
     std::fflush(stdout);
 }
 

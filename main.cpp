@@ -10,7 +10,8 @@ int main(){
 
     attach_process(pid);
 
-    g_pcb.need_wait_signal = true;
+    // 启动时不需要等待信号，处于空闲状态等待用户命令
+    g_pcb.need_wait_signal = false;
 
     command_loop(pid);
 
