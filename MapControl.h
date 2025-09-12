@@ -96,14 +96,22 @@ public:
         return true;
     }
 
-    // 显示所有内存映射
-    inline void print_maps() const {
-        LOG("=== 所有内存映射 ===");
+    // 显示所有内存映射，支持可选的过滤字符串
+    inline void print_maps(const std::string& filter = "") const {
+        LOG("/proc/%d/maps | grep %s",pid_,filter.c_str());
+
         for (size_t i = 0; i < maps_.size(); i++) {
             const auto& map = maps_[i];
-             printf("[%zu] %016lx-%016lx %s prot=0x%x %s\n",
-                    i, (uintptr_t)map.start_addr, (uintptr_t)map.end_addr,
+            
+            char full_info[1024];
+            snprintf(full_info, sizeof(full_info), "%016lx-%016lx %s prot=0x%x %s",
+                    (uintptr_t)map.start_addr, (uintptr_t)map.end_addr,
                     map.permissions, map.prot_flags, map.path.c_str());
+            
+            // 如果没有过滤条件，或者匹配过滤条件，则显示
+            if (filter.empty() || std::string(full_info).find(filter) != std::string::npos) {
+                printf("[%zu] %s\n", i, full_info);
+            }
         }
         LOG("=================");
     }

@@ -176,14 +176,15 @@ void handle_command_signal(pid_t pid, uint64_t pc, int sig, siginfo_t info) {
         case CommandType::CONTINUE:
         {
             if (sig == SIGTRAP && info.si_code == TRAP_BRKPT) {
-                // 命中断点：临时禁用断点，单步一次跳过
+                // 命中断点：停下来等待用户命令
                 LOG("命中断点 PC=0x%lx", pc);
                 g_pcb.last_disasm_addr = 0; // 重置反汇编地址，让下次u命令从当前PC开始
                 bp_temp_disable(pid, (void*)pc);
                 print_all_regs(pid);
+                disasm_lines(pid, nullptr, 1, false);  // 显示当前指令
                 
-                // 单步跳过断点
-                step_into(pid);
+                // 清除命令状态，停下来等待用户命令
+                g_pcb.current_command = CommandType::NONE;
                 
             } else if (sig == SIGTRAP && info.si_code == TRAP_HWBKPT) {
                 // 单步完成：恢复断点，继续执行

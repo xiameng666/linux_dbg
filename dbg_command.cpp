@@ -80,9 +80,17 @@ void command_loop(pid_t pid) {
 }
 
 void cmd_continue(pid_t pid, const std::vector<std::string>& args) {
-    // 🎯 设置命令类型，让parse_thread_signal统一处理
+    // 设置命令类型，让parse_thread_signal统一处理
     g_pcb.current_command = CommandType::CONTINUE;
-    resume_process(pid);
+    
+    // 检查是否需要跨越断点
+    if (g_pcb.temp_disabled_bp != nullptr) {
+        // 当前在一个临时禁用的断点上，需要先单步跨越
+        step_into(pid);
+    } else {
+        // 正常继续执行
+        resume_process(pid);
+    }
 }
 
 // ✅ cmd_parse已移除，parse_thread_signal现在在command_loop中统一调用
@@ -164,9 +172,17 @@ void cmd_bp_clear(pid_t pid, const std::vector<std::string>& args) {
 }
 
 void cmd_maps(pid_t pid, const std::vector<std::string>& args) {
-    // 这是你原来的 else if(inst == "map") 里面的代码，完全不变
     MapControl mapControl(pid);
-    mapControl.print_maps();
+    
+    // 检查是否提供了过滤字符串参数
+    if (args.size() >= 2) {
+        // 使用第二个参数作为过滤条件
+        mapControl.print_maps(args[1]);
+    } else {
+        // 没有参数，显示所有映射
+        mapControl.print_maps();
+    }
+    
     // 🚫 不需要等待信号：读取/proc/pid/maps文件
     g_pcb.need_wait_signal = false;
 }
@@ -225,7 +241,7 @@ void cmd_help(pid_t pid, const std::vector<std::string>& args) {
     std::cout << "  bp <addr>  - Set breakpoint\n";
     std::cout << "  bpl        - List breakpoints\n";
     std::cout << "  bpc <idx>  - Clear breakpoint\n";
-    std::cout << "  map        - Show memory maps\n";
+    std::cout << "  map [filter] - Show memory maps (optional filter string)\n";
     std::cout << "  prot <addr> <len> <prot> - Change protection\n";
     std::cout << "  mr <addr> <len> - Read memory\n";
     std::cout << "  mw <addr> <bytes...> - Write memory\n";
