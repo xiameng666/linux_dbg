@@ -73,7 +73,7 @@ void parse_thread_signal(pid_t pid) {
     //LOG_ENTER("pid=%d", pid);
 
     int status = 0;
-    pid_t r = waitpid(pid, &status, 0);  // 阻塞等待该线程的状态变化
+    pid_t r = waitpid(pid, &status, 0);  // 阻塞等待信号
     if (r == -1) {
         LOGE("waitpid failed: %s", strerror(errno));
         return;
@@ -94,23 +94,22 @@ void parse_thread_signal(pid_t pid) {
 
     // trace模式：检查是否应该停止，但让信号正常处理
     if (g_pcb.current_command == CommandType::TRACE) {
-        // 检查停止条件
         if (sig == SIGTRAP && info.si_code == TRAP_BRKPT) {
             // 命中断点：停止trace
             LOG("trace命中断点 PC=0x%lx，停止trace", pc);
             trace_reset(); 
         } else if (pc == g_pcb.trace_end) {
             // 到达结束地址：停止trace
-            trace_log_step(pid);  // 记录结束地址的指令
+            trace_log_step(pid);
             LOG("trace到达结束地址 PC=0x%lx，停止trace", pc);
             trace_reset();
         } else {
-            // 继续trace：记录当前步骤（无论跳转到哪里）
+            // 无论跳转到哪 继续trace
             trace_log_step(pid);
         }
     }
     
-    // 统一的命令处理
+    // 命令处理
     if (g_pcb.current_command != CommandType::NONE) {
         handle_command_signal(pid, pc, sig, info);
         return;
@@ -170,7 +169,6 @@ void handle_command_signal(pid_t pid, uint64_t pc, int sig, siginfo_t info) {
                     } else {
                         step_over(pid);
                     }
-                    // 保持命令状态，等待单步完成信号
                 }
                 
             } else if (sig == SIGTRAP && info.si_code == TRAP_HWBKPT) {//HWBKPT 是 singelstep后的信号
@@ -250,17 +248,12 @@ void handle_command_signal(pid_t pid, uint64_t pc, int sig, siginfo_t info) {
             break;
             
         default:
-            // 不应该到达这里
             g_pcb.current_command = CommandType::NONE;
             break;
     }
 }
 
-// ================================
-// 新的状态机信号处理系统
-// ================================
-
-void parse_signal_new(pid_t pid) {
+void parse_signal(pid_t pid) {
     LOG_ENTER("(pid=%d)", pid);
 
     // 等待信号
@@ -303,7 +296,7 @@ void parse_signal_new(pid_t pid) {
     }
 }
 
-// IDLE状态：处理意外的信号（程序被外部中断）
+// IDLE状态：意外中断
 void handle_idle_signal(pid_t pid, uint64_t pc, int sig, siginfo_t info) {
     LOG_ENTER("(pid=%d, pc=0x%lx, sig=%d, code=%d)", pid, pc, sig, info.si_code);
 
@@ -359,6 +352,7 @@ void handle_continue_signal(pid_t pid, uint64_t pc, int sig, siginfo_t info) {
 // STEP状态：处理单步完成信号
 void handle_step_signal(pid_t pid, uint64_t pc, int sig, siginfo_t info) {
     LOG_ENTER("(pid=%d, pc=0x%lx, sig=%d, code=%d)", pid, pc, sig, info.si_code);
+
     if (sig == SIGTRAP && info.si_code == TRAP_HWBKPT) {
         LOG("单步完成 PC=0x%lx", pc);
         

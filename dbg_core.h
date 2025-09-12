@@ -80,7 +80,7 @@ void parse_thread_signal(pid_t pid);
 void handle_command_signal(pid_t pid, uint64_t pc, int sig, siginfo_t info);  // 统一命令信号处理
 
 // 新的状态机信号处理
-void parse_signal_new(pid_t pid);                                    // 新的统一信号入口
+void parse_signal(pid_t pid);                                    // 新的统一信号入口
 void handle_idle_signal(pid_t pid, uint64_t pc, int sig, siginfo_t info);
 void handle_continue_signal(pid_t pid, uint64_t pc, int sig, siginfo_t info);
 void handle_step_signal(pid_t pid, uint64_t pc, int sig, siginfo_t info);
