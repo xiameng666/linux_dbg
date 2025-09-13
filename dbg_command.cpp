@@ -80,8 +80,6 @@ void cmd_continue(pid_t pid, const std::vector<std::string>& args) {
     }
 }
 
-// ✅ cmd_parse已移除，parse_thread_signal现在在command_loop中统一调用
-
 void cmd_stop(pid_t pid, const std::vector<std::string>& args) {
     //挂起
     suspend_process(pid);
@@ -180,7 +178,7 @@ void cmd_protect(pid_t pid, const std::vector<std::string>& args) {
     size_t len = std::stoul(args[2], nullptr,0);
     int prot = std::stoi(args[3], nullptr,0);
     mapControl.change_map_permissions(address,len,prot);
-    // 🚫 不需要等待信号：内存保护属性修改
+    // 不需要等待信号：内存保护属性修改
     g_pcb.need_wait_signal = false;
 }
 
@@ -194,7 +192,7 @@ void cmd_memory_read(pid_t pid, const std::vector<std::string>& args) {
     if (bytes_read > 0) {
         hexdump(read_memory_buffer, bytes_read, (uintptr_t)address);
     }
-    // 🚫 不需要等待信号：内存读取操作
+    // 不需要等待信号：内存读取操作
     g_pcb.need_wait_signal = false;
 }
 
@@ -209,7 +207,7 @@ void cmd_memory_write(pid_t pid, const std::vector<std::string>& args) {
 
     ssize_t written = write_memory_ptrace(pid, (void *) address, bytes.data(), bytes.size());
     std::cout << "write " << written << " bytes\n";
-    // 🚫 不需要等待信号：内存写入操作
+    // 不需要等待信号：内存写入操作
     g_pcb.need_wait_signal = false;
 }
 

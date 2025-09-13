@@ -92,7 +92,27 @@ void handle_trace_signal_new(pid_t pid, uint64_t pc, int sig, siginfo_t info);
 long step_into(pid_t pid);
 long step_over(pid_t pid);
 
+//
+bool bp_set(pid_t pid,void* address);
+bool bp_set_temp_for_step_over(pid_t pid, void* address);  // 设置步过操作的临时断点
+bool bp_clear(pid_t pid, size_t index);
+void bp_show();
+void print_singel_bp(size_t index);
+void bp_temp_disable(pid_t pid, void* address);  // 临时禁用断点
+void bp_restore_temp_disabled(pid_t pid);  // 恢复临时禁用的断点
+bool bp_is_at_address(void* address);  // 检查指定地址是否有断点
+bool bp_is_temp_for_step_over(void* address);  // 检查是否是步过的临时断点
+void bp_clear_all_temp_for_step_over(pid_t pid);  // 清除所有步过的临时断点
 
+void bp_trace_disable_all(pid_t pid);  // trace开始时禁用所有断点
+void bp_trace_enable_all(pid_t pid);   // trace结束时启用所有断点
+
+struct breakpoint{
+    void* address;
+    uint32_t origin_inst;
+    bool is_temp = false;  // 是否是步过操作的临时断点
+};
+static std::vector<breakpoint> g_bp_vec;
 
 // 寄存器
 long get_reg(pid_t pid, const char* reg_name, uint64_t* value);
