@@ -24,8 +24,6 @@ static std::unordered_map<std::string, CommandHandler> command_table = {
 };
 
 void command_loop(pid_t pid) {
-    MapControl mapControl(pid);
-    uint8_t read_memory_buffer[0x1000];
     std::string cmdline;
 
     while(true){
@@ -183,15 +181,20 @@ void cmd_protect(pid_t pid, const std::vector<std::string>& args) {
 }
 
 void cmd_memory_read(pid_t pid, const std::vector<std::string>& args) {
-    static uint8_t read_memory_buffer[0x1000];
-
     //[mr addr len] 读取内存
     void *address= (void*)std::stoull(args[1], nullptr,16);
     size_t len = std::stoul(args[2], nullptr,0);
+    
+    // 动态分配对应长度的buffer
+    auto *read_memory_buffer = new uint8_t[len];
+    
     ssize_t bytes_read = read_memory_vm(pid, address, len, read_memory_buffer);
     if (bytes_read > 0) {
         hexdump(read_memory_buffer, bytes_read, (uintptr_t)address);
     }
+
+    delete[] read_memory_buffer;
+    
     // 不需要等待信号：内存读取操作
     g_pcb.need_wait_signal = false;
 }
@@ -246,12 +249,11 @@ void cmd_trace(pid_t pid, const std::vector<std::string> &args) {
     LOG("在trace起始地址 0x%lx 设置断点", start);
     if (bp_set(pid, (void*)start)) {
         LOG("断点设置成功，继续执行直到到达trace起始地址");
-        // 设置专门的trace等待状态
         g_pcb.debugger_state = DebuggerState::TRACE_WAIT_START;
-        g_pcb.current_command = CommandType::TRACE; // 设置为trace命令
+        g_pcb.current_command = CommandType::TRACE;
         resume_process(pid);
     } else {
-        LOG("断点设置失败，trace启动失败");
+        LOG("trace 断点设置失败");
         trace_reset();
         g_pcb.need_wait_signal = false;
     }

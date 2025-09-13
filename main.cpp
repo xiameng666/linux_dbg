@@ -17,8 +17,11 @@ int main(int argc, char* argv[]){
 #else
     pid_t pid = get_process_pid("dbgtest");
 #endif
-    printf("%d",getpid());
+    LOG("调试器pid %d",getpid());
+
     attach_process(pid);
+
+    g_pcb.pid= pid;
 
     // 启动时不需要等待信号
     g_pcb.need_wait_signal = false;

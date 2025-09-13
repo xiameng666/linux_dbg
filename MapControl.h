@@ -96,7 +96,7 @@ public:
         return true;
     }
 
-    // 显示所有内存映射，支持可选的过滤字符串
+    // 显示内存映射
     inline void print_maps(const std::string& filter = "") const {
         LOG("/proc/%d/maps | grep %s",pid_,filter.c_str());
 

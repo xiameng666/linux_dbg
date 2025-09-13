@@ -76,12 +76,12 @@ long attach_process(pid_t pid);
 long detach_process(pid_t pid);
 long resume_process(pid_t pid);
 int suspend_process(pid_t pid);
-// 旧的信号处理（逐步废弃）
-void parse_thread_signal(pid_t pid);
-void handle_command_signal(pid_t pid, uint64_t pc, int sig, siginfo_t info);  // 统一命令信号处理
+
+//void parse_thread_signal(pid_t pid);
+//void handle_command_signal(pid_t pid, uint64_t pc, int sig, siginfo_t info);
 
 // 新的状态机信号处理
-void parse_signal(pid_t pid);                                    // 新的统一信号入口
+void parse_signal(pid_t pid);
 void handle_idle_signal(pid_t pid, uint64_t pc, int sig, siginfo_t info);
 void handle_continue_signal(pid_t pid, uint64_t pc, int sig, siginfo_t info);
 void handle_step_signal(pid_t pid, uint64_t pc, int sig, siginfo_t info);
@@ -100,12 +100,13 @@ void bp_show();
 void print_singel_bp(size_t index);
 void bp_temp_disable(pid_t pid, void* address);  // 临时禁用断点
 void bp_restore_temp_disabled(pid_t pid);  // 恢复临时禁用的断点
+/*
 bool bp_is_at_address(void* address);  // 检查指定地址是否有断点
 bool bp_is_temp_for_step_over(void* address);  // 检查是否是步过的临时断点
 void bp_clear_all_temp_for_step_over(pid_t pid);  // 清除所有步过的临时断点
-
 void bp_trace_disable_all(pid_t pid);  // trace开始时禁用所有断点
 void bp_trace_enable_all(pid_t pid);   // trace结束时启用所有断点
+ */
 
 struct breakpoint{
     void* address;
