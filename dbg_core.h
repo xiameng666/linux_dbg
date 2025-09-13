@@ -41,6 +41,7 @@ enum class DebuggerState {
     IDLE = 0,           // 空闲：等待用户命令
     CONTINUE,           // 运行：程序正在执行，等待断点
     STEP,               // 单步：执行一条指令
+    TRACE_WAIT_START,   // trace：等待命中起始断点
     TRACE_ACTIVE        // trace：自动单步直到结束
 };
 
@@ -63,7 +64,7 @@ struct PCB{
     // 信号等待控制
     bool need_wait_signal = false; //是否需要等待进程信号
     
-    // 当前执行的命令类型（逐步废弃）
+    // 当前执行的命令类型
     CommandType current_command = CommandType::NONE;
     
     // 新的调试器状态机
@@ -84,33 +85,14 @@ void parse_signal(pid_t pid);                                    // 新的统一
 void handle_idle_signal(pid_t pid, uint64_t pc, int sig, siginfo_t info);
 void handle_continue_signal(pid_t pid, uint64_t pc, int sig, siginfo_t info);
 void handle_step_signal(pid_t pid, uint64_t pc, int sig, siginfo_t info);
+void handle_trace_wait_start_signal(pid_t pid, uint64_t pc, int sig, siginfo_t info);  // 等待trace起始断点
 void handle_trace_signal_new(pid_t pid, uint64_t pc, int sig, siginfo_t info);
 
 //
 long step_into(pid_t pid);
 long step_over(pid_t pid);
 
-//
-bool bp_set(pid_t pid,void* address);
-bool bp_set_temp_for_step_over(pid_t pid, void* address);  // 设置步过操作的临时断点
-bool bp_clear(pid_t pid, size_t index);
-void bp_show();
-void print_singel_bp(size_t index);
-void bp_temp_disable(pid_t pid, void* address);  // 临时禁用断点
-void bp_restore_temp_disabled(pid_t pid);  // 恢复临时禁用的断点
-bool bp_is_at_address(void* address);  // 检查指定地址是否有断点
-bool bp_is_temp_for_step_over(void* address);  // 检查是否是步过的临时断点
-void bp_clear_all_temp_for_step_over(pid_t pid);  // 清除所有步过的临时断点
 
-void bp_trace_disable_all(pid_t pid);  // trace开始时禁用所有断点
-void bp_trace_enable_all(pid_t pid);   // trace结束时启用所有断点
-
-struct breakpoint{
-    void* address;
-    uint32_t origin_inst;
-    bool is_temp = false;  // 是否是步过操作的临时断点
-};
-static std::vector<breakpoint> g_bp_vec;
 
 // 寄存器
 long get_reg(pid_t pid, const char* reg_name, uint64_t* value);

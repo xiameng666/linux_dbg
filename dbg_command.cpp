@@ -248,9 +248,9 @@ void cmd_trace(pid_t pid, const std::vector<std::string> &args) {
     LOG("在trace起始地址 0x%lx 设置断点", start);
     if (bp_set(pid, (void*)start)) {
         LOG("断点设置成功，继续执行直到到达trace起始地址");
-        // 设置状态为CONTINUE，等待起始断点
-        g_pcb.debugger_state = DebuggerState::CONTINUE;
-        g_pcb.current_command = CommandType::CONTINUE; // 保留兼容
+        // 设置专门的trace等待状态
+        g_pcb.debugger_state = DebuggerState::TRACE_WAIT_START;
+        g_pcb.current_command = CommandType::TRACE; // 设置为trace命令
         resume_process(pid);
     } else {
         LOG("断点设置失败，trace启动失败");
@@ -271,10 +271,11 @@ void cmd_print_pcb(pid_t pid, const std::vector<std::string>& args) {
     printf("\n调试器状态:\n");
     printf("  当前状态: ");
     switch (g_pcb.debugger_state) {
-        case DebuggerState::IDLE:        printf("IDLE (空闲)\n"); break;
-        case DebuggerState::CONTINUE:    printf("CONTINUE (运行)\n"); break;
-        case DebuggerState::STEP:        printf("STEP (单步)\n"); break;
-        case DebuggerState::TRACE_ACTIVE: printf("TRACE_ACTIVE (trace中)\n"); break;
+        case DebuggerState::IDLE:             printf("IDLE (空闲)\n"); break;
+        case DebuggerState::CONTINUE:         printf("CONTINUE (运行)\n"); break;
+        case DebuggerState::STEP:             printf("STEP (单步)\n"); break;
+        case DebuggerState::TRACE_WAIT_START: printf("TRACE_WAIT_START (等待trace起始)\n"); break;
+        case DebuggerState::TRACE_ACTIVE:     printf("TRACE_ACTIVE (trace中)\n"); break;
         default: printf("未知(%d)\n", (int)g_pcb.debugger_state); break;
     }
 
