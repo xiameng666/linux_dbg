@@ -1,67 +1,62 @@
-//
-// Created by XiaM on 2025/9/9.
-//
+// 修改后的 log.h
 
 #ifndef LINUX_DBG_LOG_H
 #define LINUX_DBG_LOG_H
 
-#include <android/log.h>
 #include <cstdio>
+#include <cstring>
+#include <errno.h>
 
-#ifndef LOG_TAG
-#define LOG_TAG "linux_dbg"
-#endif
+// 日志级别
+enum LogLevel {
+    LOG_DEBUG = 0,
+    LOG_INFO = 1,
+    LOG_WARNING = 2,
+    LOG_ERROR = 3
+};
 
-#define LOG(...) do { printf(__VA_ARGS__); printf("\n"); } while(0)
-#define LOGD(...) //do { printf("----> %s", __FUNC_NAME__);printf(__VA_ARGS__); printf("\n"); } while(0) //  ((void)0)//
-#define LOGE(...)  do { printf(__VA_ARGS__); printf("\n"); } while(0)
+// 全局日志级别控制
+extern LogLevel g_log_level;
 
-// function entry logging
-#if defined(__GNUC__)
-#define __FUNC_NAME__ __PRETTY_FUNCTION__
-#else
-#define __FUNC_NAME__ __func__
-#endif
+// 初始化日志级别（在main.cpp中调用）
+inline void init_log_level(LogLevel level = LOG_INFO) {
+    g_log_level = level;
+}
 
-#define LOG_ENTER(...) // do { printf("----> %s", __FUNC_NAME__); printf(__VA_ARGS__); printf("\n");} while(0) //
+// 日志宏定义 - 添加级别检查
+#define LOGI(fmt, ...) \
+    do { \
+        if (g_log_level <= LOG_INFO) { \
+            printf("[INFO] " fmt "\n", ##__VA_ARGS__); \
+        } \
+    } while(0)
 
+#define LOGD(fmt, ...) \
+    do { \
+        if (g_log_level <= LOG_DEBUG) { \
+            printf("[DEBUG] " fmt "\n", ##__VA_ARGS__); \
+        } \
+    } while(0)
 
-/*
-LOG_LEVEL: 0=OFF, 1=E, 2=W, 3=I, 4=D, 5=V
-#ifndef LOG_LEVEL
-#define LOG_LEVEL 5
-#endif
+#define LOGW(fmt, ...) \
+    do { \
+        if (g_log_level <= LOG_WARNING) { \
+            printf("[WARN] " fmt "\n", ##__VA_ARGS__); \
+        } \
+    } while(0)
 
-#if LOG_LEVEL >= 5
-#define LOGV(...) __android_log_print(ANDROID_LOG_DEBUG,   LOG_TAG, __VA_ARGS__)
-#else
-#define LOGV(...) ((void)0)
-#endif
+#define LOGE(fmt, ...) \
+    do { \
+        if (g_log_level <= LOG_ERROR) { \
+            fprintf(stderr, "[ERROR] %s:%d - " fmt "\n", __FILE__, __LINE__, ##__VA_ARGS__); \
+        } \
+    } while(0)
 
-#if LOG_LEVEL >= 4
-#define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG,   LOG_TAG, __VA_ARGS__)
-#else
-#define LOGD(...) ((void)0)
-#endif
-
-#if LOG_LEVEL >= 3
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,    LOG_TAG, __VA_ARGS__)
-#else
-#define LOGI(...) ((void)0)
-#endif
-
-#if LOG_LEVEL >= 2
-#define LOGW(...) __android_log_print(ANDROID_LOG_WARN,    LOG_TAG, __VA_ARGS__)
-#else
-#define LOGW(...) ((void)0)
-#endif
-
-#if LOG_LEVEL >= 1
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR,   LOG_TAG, __VA_ARGS__)
-#else
-#define LOGE(...) ((void)0)
-#endif
- */
-
+#define LOG_ENTER(fmt, ...) \
+    do { \
+        if (g_log_level <= LOG_DEBUG) { \
+            LOGD("------->>> %s " fmt, __FUNCTION__, ##__VA_ARGS__); \
+        } \
+    } while(0)
 
 #endif //LINUX_DBG_LOG_H

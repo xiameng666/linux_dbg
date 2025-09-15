@@ -43,11 +43,11 @@ public:
 
 public:
     inline const MapData* find_region(void* address) const {
-        LOG("--->find_region(%p)", address);
+        LOGI("--->find_region(%p)", address);
 
         for (const auto& map : maps_) {
-            LOG("  [0x%p-0x%p]",
-                map.start_addr, map.end_addr);
+            LOGI("  [0x%p-0x%p]",
+                 map.start_addr, map.end_addr);
 
             if (address >= map.start_addr && address < map.end_addr) {
 
@@ -98,7 +98,7 @@ public:
 
     // 显示内存映射
     inline void print_maps(const std::string& filter = "") const {
-        LOG("/proc/%d/maps | grep %s",pid_,filter.c_str());
+        LOGI("/proc/%d/maps | grep %s", pid_, filter.c_str());
 
         for (size_t i = 0; i < maps_.size(); i++) {
             const auto& map = maps_[i];
@@ -113,7 +113,7 @@ public:
                 printf("[%zu] %s\n", i, full_info);
             }
         }
-        LOG("=================");
+        LOGI("=================");
     }
 
     inline int permissions_to_prot(const char* perms) {
@@ -132,9 +132,9 @@ public:
             return false;
         }
 
-        LOG("找到区域: %016lx-%016lx %s %s",
-            (uintptr_t)region->start_addr, (uintptr_t)region->end_addr,
-            region->permissions, region->path.c_str());
+        LOGI("找到区域: %016lx-%016lx %s %s",
+             (uintptr_t)region->start_addr, (uintptr_t)region->end_addr,
+             region->permissions, region->path.c_str());
 
         uintptr_t page_start = PAGE_START(address);
         uintptr_t page_end = PAGE_END((char*)address + len);
@@ -150,15 +150,15 @@ public:
             return false;
         }
 
-        LOG("成功修改权限: %lu-%lu", page_start, page_end);
+        LOGI("成功修改权限: %lu-%lu", page_start, page_end);
         return true;
     }
 
     inline bool resume_map_permissions(){
         LOG_ENTER("()");
 
-        LOG("恢复权限: 地址=%p, 长度=%zu, 权限=0x%x",
-            temp_address_, temp_length_, temp_prot_);
+        LOGI("恢复权限: 地址=%p, 长度=%zu, 权限=0x%x",
+             temp_address_, temp_length_, temp_prot_);
 
         if (mprotect(temp_address_, temp_length_, temp_prot_) == -1) {
             LOGE("恢复权限失败: %s", strerror(errno));

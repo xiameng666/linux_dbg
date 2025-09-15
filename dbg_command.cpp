@@ -2,6 +2,9 @@
 // Created by XiaM on 2025/9/11.
 //
 #include "dbg_command.h"
+#include <iostream>
+#include <sstream>
+#include <algorithm>
 
 // 命令映射表
 static std::unordered_map<std::string, CommandHandler> command_table = {
@@ -19,68 +22,96 @@ static std::unordered_map<std::string, CommandHandler> command_table = {
         {"prot", cmd_protect},
         {"mr", cmd_memory_read},
         {"mw", cmd_memory_write},
+        {"trace", cmd_trace},
         {"help", cmd_help},
-        {"trace", cmd_trace}
+        {"q", cmd_quit},
+        {"quit", cmd_quit}
 };
 
+// 获取用户输入
+std::string get_user_command() {
+    std::cout << ">> ";
+    std::string cmd;
+    std::getline(std::cin, cmd);
+    return cmd;
+}
+
+// 执行命令
+void execute_command(pid_t pid, const std::string& cmd) {
+    if (cmd.empty()) {
+        return;
+    }
+
+    std::vector<std::string> args = split_space(cmd);
+    if (args.empty()) {
+        return;
+    }
+
+    auto it = command_table.find(args[0]);
+    if (it != command_table.end()) {
+        it->second(pid, args);
+    } else {
+        std::cout << "未知命令: " << args[0] << "\n";
+        std::cout << "try 'help'\n";
+    }
+}
+
 void command_loop(pid_t pid) {
-    std::string cmdline;
+    LOG_ENTER("(pid=%d)", pid);
 
-    while(true){
-        while (g_pcb.need_wait_signal) {
+    while (true) {
+        // 处理上一次指令导致的信号
+        if (g_pcb.need_wait_signal) {
             parse_signal(pid);
+            continue;  // 处理完 重新检查状态
         }
 
-        // 不需要等待信号时才进入命令输入
-        while(true) {
-            std::cout<< "> " <<std::flush;
-            std::getline(std::cin,cmdline);
-            
-            if(!cmdline.empty()) break; 
-        }
-        auto args_vec = split_space(cmdline);
-
-//        //观测分割情况
-//        for (size_t i = 0; i < args_vec.size(); ++i) {
-//            LOG("arg[%zu]=%s", i, args_vec[i].c_str());
-//        }
-
-        if(args_vec.empty()) continue;
-        std::string inst = args_vec[0];
-        std::transform(inst.begin(), inst.end(), inst.begin(), ::tolower);
-
-        //默认需要等待信号
-        g_pcb.need_wait_signal = true;
-
-        // 查找并执行命令
-        auto it = command_table.find(inst);
-        if(it != command_table.end()) {
-            it->second(pid, args_vec);
-        } else {
-            std::cout << "Unknown command: " << inst << " (try 'help')\n";
-            g_pcb.need_wait_signal = false;
+        // 只有在IDLE状态才接受命令
+        if (g_pcb.state == DebuggerState::IDLE) {
+            std::string cmd = get_user_command();
+            execute_command(pid, cmd);
         }
     }
 }
 
+// ==================== 命令处理函数 ====================
+
 void cmd_continue(pid_t pid, const std::vector<std::string>& args) {
-    // 设置调试器状态
-    g_pcb.debugger_state = DebuggerState::CONTINUE;
-    g_pcb.current_command = CommandType::CONTINUE;
-    
-    // 检查是否需要跨越断点
-    if (g_pcb.temp_disabled_bp != nullptr) {
-        // 当前在一个临时禁用的断点上，需要先单步跨越
-        step_into(pid);
-    } else {
-        // 正常继续执行
-        resume_process(pid);
+    LOG_ENTER("(pid=%d)", pid);
+
+    // 处理当前位置有断点的情况（穿越断点）
+    uint64_t pc = 0;
+    get_reg(pid, "pc", &pc);
+
+    if (has_breakpoint_at((void*)pc)) {
+        // 临时禁用断点
+        bp_temp_disable(pid, (void*)pc);
+
+        // 单步越过断点
+        ptrace(PTRACE_SINGLESTEP, pid, 0, 0);
+        int status;
+        waitpid(pid, &status, 0);
+
+        // 恢复断点
+        bp_restore_temp_disabled(pid);
+    }
+
+    // 清理所有临时断点
+    clear_all_temp_breakpoints(pid);
+
+    // 继续执行
+    if (resume_process(pid) == 0) {
+        LOGI("cmd_continue...");
     }
 }
 
 void cmd_stop(pid_t pid, const std::vector<std::string>& args) {
-    //挂起
-    suspend_process(pid);
+    LOG_ENTER("(pid=%d)", pid);
+
+    if (suspend_process(pid) == 0) {
+        LOGI("cmd_stop");
+        g_pcb.need_wait_signal = true;
+    }
 }
 
 void cmd_registers(pid_t pid, const std::vector<std::string>& args) {
@@ -90,233 +121,342 @@ void cmd_registers(pid_t pid, const std::vector<std::string>& args) {
     } else if (args.size() == 3) {
         // r <reg_name> <value> - 设置寄存器
         try {
-            uint64_t value = std::stoull(args[2], nullptr, 0); // 支持0x前缀
+            uint64_t value = std::stoull(args[2], nullptr, 0);
             if (set_reg(pid, args[1].c_str(), value) == 0) {
-                std::cout << "Set " << args[1] << " = 0x" << std::hex << value << std::dec << "\n";
+                std::cout << "Set " << args[1] << " = 0x"
+                          << std::hex << value << std::dec << "\n";
             } else {
-                std::cout << "Failed to set register: " << args[1] << "\n";
+                std::cout << "set_reg 失败: " << args[1] << "\n";
             }
         } catch (const std::exception& e) {
-            std::cout << "Invalid value: " << args[2] << "\n";
+            std::cout << "invalid value: " << args[2] << "\n";
+        }
+    } else if (args.size() == 2) {
+        // r <reg_name> - 显示单个寄存器
+        uint64_t value;
+        if (get_reg(pid, args[1].c_str(), &value) == 0) {
+            print_single_reg(args[1], value);
+        } else {
+            std::cout << "get_reg 失败: " << args[1] << "\n";
         }
     }
-    // 不需要等待信号：寄存器读取/设置操作
-    g_pcb.need_wait_signal = false;
 }
 
 void cmd_disasm(pid_t pid, const std::vector<std::string>& args) {
-    if(args.size() == 2){
-        void*  pc_value = (void*)std::stoull(args[1], nullptr,16);
-        disasm_lines(pid, pc_value,5,true);
-    }else{
+    if (args.size() == 2) {
+        // u <addr> - 从指定地址反汇编
+        try {
+            void* pc_value = (void*)std::stoull(args[1], nullptr, 16);
+            disasm_lines(pid, pc_value, 5, false);
+        } catch (const std::exception& e) {
+            std::cout << "Invalid address: " << args[1] << "\n";
+        }
+    } else {
         // u - 连续反汇编
         disasm_lines(pid, nullptr, 5, true);
     }
-    // 不需要等待信号：纯内存读取操作
-    g_pcb.need_wait_signal = false;
 }
 
 void cmd_step_into(pid_t pid, const std::vector<std::string>& args) {
-    // 设置新的调试器状态
-    g_pcb.debugger_state = DebuggerState::STEP;
-    g_pcb.current_command = CommandType::STEP_INTO;
-    step_into(pid);
+    LOG_ENTER("(pid=%d)", pid);
+
+    // 如果当前位置有断点，需要临时禁用
+    uint64_t pc = 0;
+    get_reg(pid, "pc", &pc);
+
+    if (has_breakpoint_at((void*)pc)) {
+        bp_temp_disable(pid, (void*)pc);
+    }
+
+    // 执行单步
+    if (step_into(pid) == 0) {
+        LOGI("Single stepping...");
+    }
 }
 
 void cmd_step_over(pid_t pid, const std::vector<std::string>& args) {
-    // 设置新的调试器状态
-    g_pcb.debugger_state = DebuggerState::STEP;
-    g_pcb.current_command = CommandType::STEP_OVER;
-    step_over(pid);
-    
+    LOG_ENTER("(pid=%d)", pid);
+
+    uint64_t pc = 0;
+    get_reg(pid, "pc", &pc);
+
+    // 如果当前位置有断点，需要处理
+    if (has_breakpoint_at((void*)pc)) {
+        bp_temp_disable(pid, (void*)pc);
+    }
+
+    // 执行步过
+    if (step_over(pid) == 0) {
+        LOGI("Stepping over...");
+    }
 }
 
 void cmd_breakpoint(pid_t pid, const std::vector<std::string>& args) {
-    uint64_t addr = std::stoull(args[1], nullptr, 16);
-    bp_set(pid, (void*)addr);
-    // 不需要等待信号：断点设置操作
-    g_pcb.need_wait_signal = false;
+    if (args.size() != 2) {
+        std::cout << "Usage: bp <address>\n";
+        return;
+    }
+
+    try {
+        uint64_t addr = std::stoull(args[1], nullptr, 16);
+        if (bp_set(pid, (void*)addr)) {
+            std::cout << "Breakpoint set at 0x" << std::hex << addr << std::dec << "\n";
+        } else {
+            std::cout << "Failed to set breakpoint\n";
+        }
+    } catch (const std::exception& e) {
+        std::cout << "Invalid address: " << args[1] << "\n";
+    }
 }
 
 void cmd_bp_list(pid_t pid, const std::vector<std::string>& args) {
     bp_show();
-
-    // 不需要等待信号：断点列表显示操作
-    g_pcb.need_wait_signal = false;
 }
 
 void cmd_bp_clear(pid_t pid, const std::vector<std::string>& args) {
-    // 这是你原来的 else if (inst == "bpc") 里面的代码，完全不变
-    size_t index = (size_t)std::stoul(args[1], nullptr, 10);
-    bp_clear(pid, index);
+    if (args.size() != 2) {
+        std::cout << "Usage: bpc <index>\n";
+        return;
+    }
 
-    // 不需要等待信号：断点清除操作
-    g_pcb.need_wait_signal = false;
+    try {
+        size_t index = std::stoul(args[1], nullptr, 10);
+        if (bp_clear(pid, index)) {
+            std::cout << "Breakpoint " << index << " cleared\n";
+        } else {
+            std::cout << "Failed to clear breakpoint\n";
+        }
+    } catch (const std::exception& e) {
+        std::cout << "Invalid index: " << args[1] << "\n";
+    }
 }
 
 void cmd_maps(pid_t pid, const std::vector<std::string>& args) {
     MapControl mapControl(pid);
-    
-    // grep xxx
+
     if (args.size() >= 2) {
-        // 使用第二个参数作为过滤条件
+        // map <filter> - 过滤显示
         mapControl.print_maps(args[1]);
     } else {
-        // 没有参数，显示所有映射
+        // map - 显示所有映射
         mapControl.print_maps();
     }
-
-    // 不需要等待信号：读取/proc/pid/maps文件
-    g_pcb.need_wait_signal = false;
 }
 
 void cmd_protect(pid_t pid, const std::vector<std::string>& args) {
-    MapControl mapControl(pid);
-    void *address= (void*)std::stoull(args[1], nullptr,16);
-    size_t len = std::stoul(args[2], nullptr,0);
-    int prot = std::stoi(args[3], nullptr,0);
-    mapControl.change_map_permissions(address,len,prot);
-    // 不需要等待信号：内存保护属性修改
-    g_pcb.need_wait_signal = false;
+    if (args.size() != 4) {
+        std::cout << "Usage: prot <address> <length> <protection>\n";
+        std::cout << "  protection: combination of 1(r) 2(w) 4(x)\n";
+        return;
+    }
+
+    try {
+        MapControl mapControl(pid);
+        void* address = (void*)std::stoull(args[1], nullptr, 16);
+        size_t len = std::stoul(args[2], nullptr, 0);
+        int prot = std::stoi(args[3], nullptr, 0);
+
+        mapControl.change_map_permissions(address, len, prot);
+        std::cout << "Protection changed\n";
+    } catch (const std::exception& e) {
+        std::cout << "Invalid parameters\n";
+    }
 }
 
 void cmd_memory_read(pid_t pid, const std::vector<std::string>& args) {
-    //[mr addr len] 读取内存
-    void *address= (void*)std::stoull(args[1], nullptr,16);
-    size_t len = std::stoul(args[2], nullptr,0);
-    
-    // 动态分配对应长度的buffer
-    auto *read_memory_buffer = new uint8_t[len];
-    
-    ssize_t bytes_read = read_memory_vm(pid, address, len, read_memory_buffer);
-    if (bytes_read > 0) {
-        hexdump(read_memory_buffer, bytes_read, (uintptr_t)address);
+    if (args.size() != 3) {
+        std::cout << "Usage: mr <address> <length>\n";
+        return;
     }
 
-    delete[] read_memory_buffer;
-    
-    // 不需要等待信号：内存读取操作
-    g_pcb.need_wait_signal = false;
+    try {
+        void* address = (void*)std::stoull(args[1], nullptr, 16);
+        size_t len = std::stoul(args[2], nullptr, 0);
+
+        auto* buffer = new uint8_t[len];
+        ssize_t bytes_read = read_memory_vm(pid, address, len, buffer);
+
+        if (bytes_read > 0) {
+            hexdump(buffer, bytes_read, (uintptr_t)address);
+        } else {
+            std::cout << "Failed to read memory\n";
+        }
+
+        delete[] buffer;
+    } catch (const std::exception& e) {
+        std::cout << "Invalid parameters\n";
+    }
 }
 
 void cmd_memory_write(pid_t pid, const std::vector<std::string>& args) {
-    //[mw addr xx xx ...] 写入内存
-    void *address= (void*)std::stoull(args[1], nullptr,16);
-    std::vector<uint8_t> bytes(args.size()-2);
-    std::transform(args.begin() + 2, args.end(), bytes.begin(),
-                   [](const std::string& s) {
-                       return (uint8_t)std::stoull(s, nullptr, 16);  // 强制16进制
-                   });
+    if (args.size() < 3) {
+        std::cout << "Usage: mw <address> <byte1> <byte2> ...\n";
+        return;
+    }
 
-    ssize_t written = write_memory_ptrace(pid, (void *) address, bytes.data(), bytes.size());
-    std::cout << "write " << written << " bytes\n";
-    // 不需要等待信号：内存写入操作
-    g_pcb.need_wait_signal = false;
+    try {
+        void* address = (void*)std::stoull(args[1], nullptr, 16);
+        std::vector<uint8_t> bytes(args.size() - 2);
+
+        for (size_t i = 2; i < args.size(); i++) {
+            bytes[i - 2] = (uint8_t)std::stoull(args[i], nullptr, 16);
+        }
+
+        ssize_t written = write_memory_ptrace(pid, address, bytes.data(), bytes.size());
+        if (written > 0) {
+            std::cout << "Wrote " << written << " bytes\n";
+        } else {
+            std::cout << "Failed to write memory\n";
+        }
+    } catch (const std::exception& e) {
+        std::cout << "Invalid parameters\n";
+    }
 }
 
-void cmd_help(pid_t pid, const std::vector<std::string>& args) {
-    std::cout << "Available commands:\n";
-    std::cout << "  g          - Continue execution\n";
-    std::cout << "  p          - Print PCB (Process Control Block) status\n";
-    std::cout << "  stop       - Suspend process\n";
-    std::cout << "  r [reg] [val] - Show/set registers\n";
-    std::cout << "  u [addr]   - Disassemble\n";
-    std::cout << "  s          - Step into\n";
-    std::cout << "  n          - Step over\n";
-    std::cout << "  bp <addr>  - Set breakpoint\n";
-    std::cout << "  bpl        - List breakpoints\n";
-    std::cout << "  bpc <idx>  - Clear breakpoint\n";
-    std::cout << "  map [filter] - Show memory maps (optional filter string)\n";
-    std::cout << "  prot <addr> <len> <prot> - Change protection\n";
-    std::cout << "  mr <addr> <len> - Read memory\n";
-    std::cout << "  mw <addr> <bytes...> - Write memory\n";
-    std::cout << "  trace <start> <end> - Start trace from start to end address\n";
-    std::cout << "  help       - Show this help\n";
+void cmd_trace(pid_t pid, const std::vector<std::string>& args) {
+    if (args.size() != 3) {
+        std::cout << "Usage: trace <start_addr> <end_addr>\n";
+        return;
+    }
 
-    g_pcb.need_wait_signal = false;
-}
+    try {
+        uintptr_t start = std::stoull(args[1], nullptr, 16);
+        uintptr_t end = std::stoull(args[2], nullptr, 16);
 
-void cmd_trace(pid_t pid, const std::vector<std::string> &args) {
-    auto start= (uintptr_t)std::stoull(args[1], nullptr,16);
-    auto end= (uintptr_t)std::stoull(args[2], nullptr,16);
+        // 初始化trace
+        trace_start(start, end);
 
-    trace_start(start,end);
-    
-    // 获取当前PC
-    uint64_t current_pc = 0;
-    get_reg(pid, "pc", &current_pc);
-    
-    LOG("在trace起始地址 0x%lx 设置断点", start);
-    if (bp_set(pid, (void*)start)) {
-        LOG("断点设置成功，继续执行直到到达trace起始地址");
-        g_pcb.debugger_state = DebuggerState::TRACE_WAIT_START;
-        g_pcb.current_command = CommandType::TRACE;
-        resume_process(pid);
-    } else {
-        LOG("trace 断点设置失败");
-        trace_reset();
-        g_pcb.need_wait_signal = false;
+        // 获取当前PC
+        uint64_t pc = 0;
+        get_reg(pid, "pc", &pc);
+
+        if (pc == start) {
+            // 已经在起始点，直接开始trace
+            g_pcb.trace_started = true;
+            g_pcb.state = DebuggerState::TRACE_ACTIVE;
+            trace_log_step(pid);
+            ptrace(PTRACE_SINGLESTEP, pid, 0, 0);
+            g_pcb.need_wait_signal = true;
+            LOGI("Starting trace from current position");
+        } else {
+            // 需要先运行到起始点
+            bp_set_temp(pid, (void*)start);
+            g_pcb.state = DebuggerState::TRACE_WAIT_START;
+
+            // 处理当前位置的断点
+            if (has_breakpoint_at((void*)pc)) {
+                bp_temp_disable(pid, (void*)pc);
+                ptrace(PTRACE_SINGLESTEP, pid, 0, 0);
+                int status;
+                waitpid(pid, &status, 0);
+                bp_restore_temp_disabled(pid);
+            }
+
+            ptrace(PTRACE_CONT, pid, 0, 0);
+            g_pcb.need_wait_signal = true;
+            LOGI("Running to trace start point: 0x%lx", start);
+        }
+    } catch (const std::exception& e) {
+        std::cout << "Invalid parameters\n";
     }
 }
 
 void cmd_print_pcb(pid_t pid, const std::vector<std::string>& args) {
-    printf("=== PCB状态 ===\n");
+    printf("\n===== PCB Status =====\n");
 
-    // 基本进程信息
-    printf("进程信息:\n");
+    // 基本信息
+    printf("Process:\n");
     printf("  PID: %d\n", g_pcb.pid);
-    printf("  需要等待信号: %s\n", g_pcb.need_wait_signal ? "是" : "否");
+    printf("  Need wait signal: %s\n", g_pcb.need_wait_signal ? "Yes" : "No");
 
-    // 调试器状态信息
-    printf("\n调试器状态:\n");
-    printf("  当前状态: ");
-    switch (g_pcb.debugger_state) {
-        case DebuggerState::IDLE:             printf("IDLE (空闲)\n"); break;
-        case DebuggerState::CONTINUE:         printf("CONTINUE (运行)\n"); break;
-        case DebuggerState::STEP:             printf("STEP (单步)\n"); break;
-        case DebuggerState::TRACE_WAIT_START: printf("TRACE_WAIT_START (等待trace起始)\n"); break;
-        case DebuggerState::TRACE_ACTIVE:     printf("TRACE_ACTIVE (trace中)\n"); break;
-        default: printf("未知(%d)\n", (int)g_pcb.debugger_state); break;
-    }
-
-    printf("  命令类型(兼容): ");
-    switch (g_pcb.current_command) {
-        case CommandType::NONE:      printf("NONE\n"); break;
-        case CommandType::STEP_INTO: printf("STEP_INTO\n"); break;
-        case CommandType::STEP_OVER: printf("STEP_OVER\n"); break;
-        case CommandType::CONTINUE:  printf("CONTINUE\n"); break;
-        case CommandType::TRACE:     printf("TRACE\n"); break;
-        default: printf("未知(%d)\n", (int)g_pcb.current_command); break;
-    }
-
-    // 反汇编状态
-    printf("\n反汇编状态:\n");
-    printf("  上次反汇编地址: 0x%lx\n", g_pcb.last_disasm_addr);
+    // 调试器状态
+    printf("\nDebugger State:\n");
+    printf("  Current state: %s\n", state_to_string(g_pcb.state));
+    printf("  Last stop reason: %s\n", stop_reason_to_string(g_pcb.last_stop_reason));
 
     // 断点状态
-    printf("\n断点状态:\n");
-    printf("  临时禁用断点: %s", g_pcb.temp_disabled_bp ? "有" : "无");
+    printf("\nBreakpoint Status:\n");
+    printf("  Temp disabled BP: %s", g_pcb.temp_disabled_bp ? "Yes" : "No");
     if (g_pcb.temp_disabled_bp) {
-        printf(" (地址: 0x%lx)", (uintptr_t)g_pcb.temp_disabled_bp);
+        printf(" (0x%lx)", (uintptr_t)g_pcb.temp_disabled_bp);
+    }
+    printf("\n");
+
+    printf("  Step over BP: %s", g_pcb.step_over_bp ? "Yes" : "No");
+    if (g_pcb.step_over_bp) {
+        printf(" (0x%lx)", (uintptr_t)g_pcb.step_over_bp);
     }
     printf("\n");
 
     // Trace状态
-    printf("\nTrace状态:\n");
-    printf("  起始地址: 0x%lx\n", g_pcb.trace_begin);
-    printf("  结束地址: 0x%lx\n", g_pcb.trace_end);
-    printf("  已进入过trace: %s\n", g_pcb.trace_ever_into ? "是" : "否");
-    printf("  trace文件: %s\n", g_pcb.trace_fp ? "已打开" : "未打开");
+    printf("\nTrace Status:\n");
+    printf("  Begin: 0x%lx\n", g_pcb.trace_begin);
+    printf("  End: 0x%lx\n", g_pcb.trace_end);
+    printf("  Started: %s\n", g_pcb.trace_started ? "Yes" : "No");
+    printf("  File: %s\n", g_pcb.trace_fp ? "Open" : "Closed");
 
-    // 当前PC值
+    // 反汇编状态
+    printf("\nDisassembly:\n");
+    printf("  Last address: 0x%lx\n", g_pcb.last_disasm_addr);
+
+    // 当前PC
     uint64_t current_pc = 0;
     if (get_reg(pid, "pc", &current_pc) == 0) {
-        printf("\n当前执行状态:\n");
-        printf("  PC: 0x%lx\n", current_pc);
+        printf("\nCurrent PC: 0x%lx\n", current_pc);
     }
 
-    printf("=====================================\n");
-    
-    // 不需要等待信号
-    g_pcb.need_wait_signal = false;
+    printf("======================\n\n");
+}
+
+void cmd_help(pid_t pid, const std::vector<std::string>& args) {
+    std::cout << "\n===== Available Commands =====\n";
+    std::cout << "Execution Control:\n";
+    std::cout << "  g              - Continue execution\n";
+    std::cout << "  s              - Step into (single step)\n";
+    std::cout << "  n              - Step over\n";
+    std::cout << "  stop           - Send SIGSTOP to process\n";
+    std::cout << "\n";
+
+    std::cout << "Breakpoints:\n";
+    std::cout << "  bp <addr>      - Set breakpoint at address\n";
+    std::cout << "  bpl            - List all breakpoints\n";
+    std::cout << "  bpc <index>    - Clear breakpoint by index\n";
+    std::cout << "\n";
+
+    std::cout << "Memory:\n";
+    std::cout << "  mr <addr> <len>        - Read memory\n";
+    std::cout << "  mw <addr> <bytes...>   - Write memory\n";
+    std::cout << "  map [filter]           - Show memory maps\n";
+    std::cout << "  prot <addr> <len> <p>  - Change memory protection (p=1|2|4)\n";
+    std::cout << "\n";
+
+    std::cout << "Registers & Disassembly:\n";
+    std::cout << "  r [reg] [val]  - Show/set registers\n";
+    std::cout << "  u [addr]       - Disassemble at address or continue\n";
+    std::cout << "\n";
+
+    std::cout << "Tracing:\n";
+    std::cout << "  trace <start> <end> - Trace execution from start to end\n";
+    std::cout << "\n";
+
+    std::cout << "Other:\n";
+    std::cout << "  p              - Print PCB status\n";
+    std::cout << "  help           - Show this help\n";
+    std::cout << "  q/quit         - Quit debugger\n";
+    std::cout << "===============================\n\n";
+}
+
+void cmd_quit(pid_t pid, const std::vector<std::string>& args) {
+    std::cout << "Detaching from process and exiting...\n";
+
+    // 清理trace
+    if (g_pcb.trace_fp) {
+        trace_reset();
+    }
+
+    // 分离进程
+    detach_process(pid);
+
+    // 退出程序
+    exit(0);
 }
